@@ -5,8 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Image, Mic, Upload, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { Button } from "@ui";
-import { avatarsApi, type Avatar } from "@/api/avatars";
 import { toast } from "react-hot-toast";
+import { getAvatarById } from "@/api/avatars";
 
 const PHOTOS_REQUIRED = 21;
 const VOICE_REQUIRED = 10;
@@ -25,7 +25,7 @@ export default function LabPage() {
   const loadAvatar = useCallback(async () => {
     if (!avatarId) return;
     try {
-      const res = await avatarsApi.getOne(avatarId);
+      const res: any = await getAvatarById(avatarId);
       if (res?.data?.avatar) setAvatar(res.data.avatar);
     } catch (e) {
       toast.error("Avatar not found");
@@ -53,8 +53,10 @@ export default function LabPage() {
     setVoiceFiles((prev) => [...prev, ...files].slice(0, VOICE_REQUIRED));
   };
 
-  const removePhoto = (i: number) => setPhotoFiles((p) => p.filter((_, j) => j !== i));
-  const removeVoice = (i: number) => setVoiceFiles((p) => p.filter((_, j) => j !== i));
+  const removePhoto = (i: number) =>
+    setPhotoFiles((p) => p.filter((_, j) => j !== i));
+  const removeVoice = (i: number) =>
+    setVoiceFiles((p) => p.filter((_, j) => j !== i));
 
   const handleUpload = async () => {
     if (!avatarId || !avatar) return;
@@ -70,7 +72,9 @@ export default function LabPage() {
         photos: photosToSend.length ? photosToSend : undefined,
         voiceSamples: voiceToSend.length ? voiceToSend : undefined,
       });
-      toast.success(`Uploaded. Photos: ${res?.data?.counts?.photos ?? 0}, Voice: ${res?.data?.counts?.voiceSamples ?? 0}`);
+      toast.success(
+        `Uploaded. Photos: ${res?.data?.counts?.photos ?? 0}, Voice: ${res?.data?.counts?.voiceSamples ?? 0}`,
+      );
       if (res?.data?.avatar) setAvatar(res.data.avatar);
       setPhotoFiles([]);
       setVoiceFiles([]);
@@ -85,7 +89,13 @@ export default function LabPage() {
   if (!avatarId) {
     return (
       <div className="min-h-screen bg-[#050505] text-white p-6 lg:p-10">
-        <p className="text-gray-400">No avatar selected. <Link href="/avatars" className="text-primary underline">Choose an avatar</Link> and click Setup.</p>
+        <p className="text-gray-400">
+          No avatar selected.{" "}
+          <Link href="/avatars" className="text-primary underline">
+            Choose an avatar
+          </Link>{" "}
+          and click Setup.
+        </p>
       </div>
     );
   }
@@ -109,12 +119,17 @@ export default function LabPage() {
     <div className="min-h-screen bg-[#050505] text-white p-6 lg:p-10">
       <header className="flex justify-between items-center mb-10">
         <div className="flex items-center gap-4">
-          <Link href="/avatars" className="p-2 rounded-lg hover:bg-white/5 text-gray-400">
+          <Link
+            href="/avatars"
+            className="p-2 rounded-lg hover:bg-white/5 text-gray-400"
+          >
             <ArrowLeft size={20} />
           </Link>
           <div>
             <h1 className="text-2xl font-bold tracking-tight">The Lab</h1>
-            <p className="text-gray-500 text-sm">{avatar.name} – upload assets for training</p>
+            <p className="text-gray-500 text-sm">
+              {avatar.name} – upload assets for training
+            </p>
           </div>
         </div>
       </header>
@@ -129,7 +144,9 @@ export default function LabPage() {
             </h2>
             {photosOk && <CheckCircle2 className="text-green-500" size={24} />}
           </div>
-          <p className="text-sm text-gray-400 mb-4">Upload 21 photos for visual training.</p>
+          <p className="text-sm text-gray-400 mb-4">
+            Upload 21 photos for visual training.
+          </p>
           <input
             type="file"
             accept="image/*"
@@ -141,7 +158,9 @@ export default function LabPage() {
           <label htmlFor="photo-upload" className="block">
             <div className="border border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors">
               <Upload className="mx-auto text-gray-500 mb-2" size={32} />
-              <span className="text-sm text-gray-400">Click or drop images</span>
+              <span className="text-sm text-gray-400">
+                Click or drop images
+              </span>
             </div>
           </label>
           {photoFiles.length > 0 && (
@@ -152,7 +171,13 @@ export default function LabPage() {
                   className="inline-flex items-center gap-1 bg-white/5 rounded px-2 py-1 text-xs"
                 >
                   {f.name.slice(0, 20)}
-                  <button type="button" onClick={() => removePhoto(i)} className="text-red-400">×</button>
+                  <button
+                    type="button"
+                    onClick={() => removePhoto(i)}
+                    className="text-red-400"
+                  >
+                    ×
+                  </button>
                 </span>
               ))}
             </div>
@@ -168,7 +193,9 @@ export default function LabPage() {
             </h2>
             {voiceOk && <CheckCircle2 className="text-green-500" size={24} />}
           </div>
-          <p className="text-sm text-gray-400 mb-4">Upload 10 voice samples (mp3 or wav) for cloning.</p>
+          <p className="text-sm text-gray-400 mb-4">
+            Upload 10 voice samples (mp3 or wav) for cloning.
+          </p>
           <input
             type="file"
             accept="audio/mpeg,audio/wav,audio/*"
@@ -180,7 +207,9 @@ export default function LabPage() {
           <label htmlFor="voice-upload" className="block">
             <div className="border border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors">
               <Upload className="mx-auto text-gray-500 mb-2" size={32} />
-              <span className="text-sm text-gray-400">Click or drop audio files</span>
+              <span className="text-sm text-gray-400">
+                Click or drop audio files
+              </span>
             </div>
           </label>
           {voiceFiles.length > 0 && (
@@ -191,7 +220,13 @@ export default function LabPage() {
                   className="inline-flex items-center gap-1 bg-white/5 rounded px-2 py-1 text-xs"
                 >
                   {f.name.slice(0, 20)}
-                  <button type="button" onClick={() => removeVoice(i)} className="text-red-400">×</button>
+                  <button
+                    type="button"
+                    onClick={() => removeVoice(i)}
+                    className="text-red-400"
+                  >
+                    ×
+                  </button>
                 </span>
               ))}
             </div>
@@ -203,7 +238,9 @@ export default function LabPage() {
         <Button
           text={uploading ? "Uploading..." : "Upload to Avatar"}
           onClick={handleUpload}
-          disable={uploading || (photoFiles.length === 0 && voiceFiles.length === 0)}
+          disable={
+            uploading || (photoFiles.length === 0 && voiceFiles.length === 0)
+          }
           icon={uploading ? undefined : <Upload size={18} />}
           focusOn={true}
         />
