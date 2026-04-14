@@ -1,3 +1,4 @@
+import "./pre-start";
 import app from "./app";
 import dotenv from "dotenv";
 
