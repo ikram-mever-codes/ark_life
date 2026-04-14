@@ -1,6 +1,6 @@
 // export const BASE_URL = "http://localhost:8000/api/v1";
-export const BASE_URL = "http://localhost:8000";
-// export const BASE_URL = "https://api.gtech.de/api/v1";
+// export const BASE_URL = "http://localhost:8000";
+export const BASE_URL = "https://ark-life.runtyme.io";
 
 export const successStyles = {
   style: {
