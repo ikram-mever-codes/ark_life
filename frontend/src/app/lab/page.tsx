@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Image, Mic, Upload, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { Button } from "@ui";
 import { toast } from "react-hot-toast";
-import { getAvatarById } from "@/api/avatars";
+import { Avatar, getAvatarById, uploadAvatarAssets } from "@/api/avatars";
 
 const PHOTOS_REQUIRED = 21;
 const VOICE_REQUIRED = 10;
@@ -68,7 +68,7 @@ export default function LabPage() {
     }
     setUploading(true);
     try {
-      const res = await avatarsApi.upload(avatarId, {
+      const res = await uploadAvatarAssets(avatarId, {
         photos: photosToSend.length ? photosToSend : undefined,
         voiceSamples: voiceToSend.length ? voiceToSend : undefined,
       });
