@@ -13,16 +13,16 @@ export const validatePassword = (
 };
 
 export const useCheckOnEmail = (email: string): boolean => {
-  const regEx = /^[a-zA-Z][^@\s]*@[^@\s]+\.com$/;
+  if (!email) return false;
 
-  if (!regEx.test(email.trim())) return false;
+  // Standard Email Regex:
+  // 1. Allows alphanumeric, dots, underscores, plus, and hyphens before the @
+  // 2. Ensures exactly one @
+  // 3. Allows multiple domain segments (e.g., mail.co.uk or gmail.com)
+  // 4. Ensures the TLD (end part) is at least 2 characters long (.com, .io, .ai)
+  const regEx = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-  const checkAt = email.match(/@/g) ?? [];
-  const checkCom = email.match(/\.com/g) ?? [];
-
-  if (checkAt.length > 1 || checkCom.length > 1) return false;
-
-  return true;
+  return regEx.test(email.trim());
 };
 
 export const useCheckOnPassword = (password: string): boolean => {

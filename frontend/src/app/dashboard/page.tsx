@@ -27,7 +27,6 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        // Use the typed API helper instead of raw fetch
         const dashboardData = await getSystemOverviewSubmit();
         setData(dashboardData);
       } catch (err) {
@@ -37,7 +36,6 @@ const Dashboard: React.FC = () => {
 
     fetchStats();
 
-    // 2. Check for First Time User
     const hasSeenManual = localStorage.getItem("ark_manual_seen");
     if (!hasSeenManual) setShowManual(true);
   }, []);
@@ -65,9 +63,13 @@ const Dashboard: React.FC = () => {
     },
   ];
 
+  // Logic to handle secure redirection to Chat
+  const handleChatRedirection = () => {
+    router.push("/avatars");
+  };
+
   return (
     <div className="min-h-screen bg-[#050505] text-slate-200 p-4 lg:p-10 font-sans relative overflow-hidden">
-      {/* ONBOARDING MANUAL OVERLAY */}
       <AnimatePresence>
         {showManual && (
           <motion.div
@@ -156,7 +158,6 @@ const Dashboard: React.FC = () => {
           </div>
         ))}
 
-        {/* REDIRECTS & INTERACTIVITY */}
         <div className="lg:col-span-8 space-y-6">
           <section className="bg-[#0d0d12] border border-white/10 rounded-3xl p-8">
             <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-8">
@@ -173,15 +174,9 @@ const Dashboard: React.FC = () => {
           </section>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* LINK TO CHAT */}
+            {/* UPDATED NEURAL CHAT BUTTON */}
             <button
-              onClick={() =>
-                router.push(
-                  data?.activeAvatarId
-                    ? `/avatars/${data.activeAvatarId}/chat`
-                    : "/avatars",
-                )
-              }
+              onClick={handleChatRedirection}
               className="relative p-8 rounded-3xl bg-primary text-black transition-all hover:scale-[1.02] active:scale-95 text-left"
             >
               <h4 className="text-2xl font-black tracking-tighter mb-2">
@@ -189,9 +184,14 @@ const Dashboard: React.FC = () => {
               </h4>
               <p className="text-sm opacity-80">Link with your Digital Twin</p>
               <Play className="mt-4" size={24} fill="currentColor" />
+              {/* Optional: Visual hint if locked */}
+              {data?.trainingProgress < 100 && (
+                <div className="absolute top-4 right-4 bg-black/20 p-1 rounded-md">
+                  <ShieldCheck size={14} />
+                </div>
+              )}
             </button>
 
-            {/* LINK TO VAULT */}
             <button
               onClick={() => router.push("/memory")}
               className="relative p-8 rounded-3xl bg-[#0d0d12] border border-white/10 hover:border-primary/50 transition-all text-left"
@@ -205,7 +205,6 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* SIDEBAR */}
         <div className="lg:col-span-4 space-y-6">
           <div className="bg-[#0d0d12] border border-white/10 rounded-3xl p-6">
             <h4 className="text-sm font-bold uppercase tracking-widest text-primary mb-4">

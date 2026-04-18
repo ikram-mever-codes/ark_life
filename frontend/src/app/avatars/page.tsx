@@ -13,6 +13,8 @@ import {
   Mic,
   Play,
   Loader2,
+  MessageSquare,
+  ArrowUpRight,
 } from "lucide-react";
 import {
   listAvatars,
@@ -225,9 +227,9 @@ const AvatarCard = ({
   const [isPlaying, setIsPlaying] = useState(false);
 
   const statusStyles = {
-    draft: "border-white/10 text-white/40 bg-white/5",
-    training: "border-yellow-500/50 text-yellow-500 bg-yellow-500/5",
-    ready: "border-primary/50 text-primary bg-primary/5",
+    draft: "text-gray-500",
+    training: "text-yellow-500",
+    ready: "text-primary",
   };
 
   const handleTestSpeech = async (e: React.MouseEvent) => {
@@ -261,83 +263,104 @@ const AvatarCard = ({
   };
 
   return (
-    <div className="group relative bg-[#0a0a0a] border border-white/10 rounded-2xl p-5 hover:border-primary/40 transition-all duration-500 shadow-xl overflow-hidden">
-      <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="group relative bg-[#0d0d0d] border border-white/5 rounded-3xl overflow-hidden hover:border-primary/30 transition-all duration-500 shadow-2xl">
+      {/* Top Banner / Delete Action */}
+      <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleTermination}
-          className="p-2 text-white/20 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+          className="p-2 bg-black/40 backdrop-blur-md text-white/40 hover:text-red-500 rounded-full border border-white/5 transition-all"
         >
-          <X size={16} />
+          <X size={14} />
         </button>
       </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-4">
-          <div className="relative w-14 h-14 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center overflow-hidden shrink-0 group/avatar">
-            {avatar.heroImageUrl ? (
-              <>
-                <img
-                  src={getAssetUrl(avatar.heroImageUrl)}
-                  className="w-full h-full object-cover transition-transform duration-500 group-hover/avatar:scale-110"
-                  alt={avatar.name}
-                />
-                {avatar.status === "ready" && (
-                  <button
-                    onClick={handleTestSpeech}
-                    disabled={isPlaying}
-                    className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity"
-                  >
-                    {isPlaying ? (
-                      <Loader2
-                        size={16}
-                        className="animate-spin text-primary"
-                      />
-                    ) : (
-                      <Play size={16} className="text-primary fill-primary" />
-                    )}
-                  </button>
+      {/* Profile Visual Section */}
+      <div className="relative aspect-[4/5] w-full bg-white/5 overflow-hidden">
+        {avatar.heroImageUrl ? (
+          <>
+            <img
+              src={getAssetUrl(avatar.heroImageUrl)}
+              className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 brightness-[0.85] group-hover:brightness-100"
+              alt={avatar.name}
+            />
+            {avatar.status === "ready" && (
+              <button
+                onClick={handleTestSpeech}
+                disabled={isPlaying}
+                className="absolute bottom-4 left-4 p-3 bg-primary/20 backdrop-blur-xl border border-primary/30 rounded-full text-primary hover:bg-primary hover:text-black transition-all"
+              >
+                {isPlaying ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <Play size={18} className="fill-current" />
                 )}
-              </>
-            ) : (
-              <Zap
-                className={
-                  avatar.status === "training"
-                    ? "animate-pulse text-yellow-500"
-                    : "text-white/20"
-                }
-                size={20}
-              />
+              </button>
             )}
-          </div>
-          <div className="min-w-0">
-            <h3 className="font-black text-[13px] tracking-tight truncate uppercase italic">
-              {avatar.name}
-            </h3>
-            <span
-              className={`text-[8px] px-2 py-0.5 rounded-full uppercase font-black tracking-widest ${statusStyles[avatar.status as keyof typeof statusStyles]}`}
-            >
-              {avatar.status}
+          </>
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-3">
+            <Zap
+              className={
+                avatar.status === "training"
+                  ? "animate-pulse text-yellow-500"
+                  : "text-white/10"
+              }
+              size={48}
+              strokeWidth={1}
+            />
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+              {avatar.status === "training" ? "Syncing DNA..." : "Core Empty"}
             </span>
+          </div>
+        )}
+
+        {/* Status Badge Overlay */}
+        <div className="absolute top-4 left-4">
+          <div
+            className={`flex items-center gap-2 px-3 py-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-full text-[8px] font-black uppercase tracking-widest ${statusStyles[avatar.status as keyof typeof statusStyles]}`}
+          >
+            <div
+              className={`w-1 h-1 rounded-full bg-current ${avatar.status === "training" ? "animate-ping" : ""}`}
+            />
+            {avatar.status}
           </div>
         </div>
+      </div>
 
-        <div className="pt-4 border-t border-white/5 flex items-center justify-between">
-          <div className="flex gap-3">
-            <span className="flex items-center gap-1 text-[9px] text-white/20 font-mono">
-              <ImageIcon size={10} />
-              {avatar.photoUrls?.length || 0}
-            </span>
-            <span className="flex items-center gap-1 text-[9px] text-white/20 font-mono">
-              <Mic size={10} />
-              {avatar.voiceSampleUrls?.length || 0}
-            </span>
-          </div>
+      {/* Content Section */}
+      <div className="p-6 space-y-6">
+        <div className="space-y-1">
+          <h3 className="font-black text-lg tracking-tighter uppercase italic truncate">
+            {avatar.name}
+          </h3>
+          <p className="text-white/40 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2">
+            <ImageIcon size={12} className="text-white/20" />{" "}
+            {avatar.photoUrls?.length || 0} Frames ·{" "}
+            <Mic size={12} className="text-white/20" />{" "}
+            {avatar.voiceSampleUrls?.length || 0} Samples
+          </p>
+        </div>
+
+        <div className="flex gap-2">
           <Link
             href={`/avatars/${avatar._id}`}
-            className="text-[9px] font-black uppercase tracking-widest text-primary hover:text-white transition-colors flex items-center gap-1"
+            className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-all group/btn"
           >
-            Enter Lab <Settings2 size={10} />
+            Config{" "}
+            <Settings2
+              size={14}
+              className="group-hover/btn:rotate-90 transition-transform"
+            />
           </Link>
+
+          {avatar.status === "ready" && (
+            <Link
+              href={`/avatars/${avatar._id}/chat`}
+              className="flex-1 flex items-center justify-center gap-2 bg-primary text-black py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-primary/10"
+            >
+              Chat <MessageSquare size={14} />
+            </Link>
+          )}
         </div>
       </div>
     </div>
@@ -345,8 +368,8 @@ const AvatarCard = ({
 };
 
 const StatCard = ({ icon, label, value }: any) => (
-  <div className="bg-white/[0.02] border border-white/5 p-6 rounded-2xl flex items-center gap-5 group hover:border-white/10 transition-colors">
-    <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+  <div className="bg-white/[0.02] border border-white/5 p-6 rounded-3xl flex items-center gap-5 group hover:border-primary/20 transition-all duration-500">
+    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-primary group-hover:bg-primary/10 group-hover:scale-110 transition-all">
       {icon}
     </div>
     <div>

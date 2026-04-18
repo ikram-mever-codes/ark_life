@@ -18,6 +18,11 @@ export interface Avatar {
   voiceSampleUrls: string[];
   voiceId: string | null;
   createdAt: string;
+  mouthCoords?: {
+    x: number;
+    y: number;
+  };
+
   updatedAt: string;
 }
 
@@ -261,6 +266,45 @@ export const setAvatarHeroImage = async (
     return response.data;
   } catch (error) {
     handleApiError(error, "Hero synchronization failed");
+    throw error;
+  }
+};
+
+export const setAvatarMouthCoords = async (
+  avatarId: string,
+  coords: { x: number; y: number; width: number; height: number },
+): Promise<Avatar> => {
+  try {
+    console.log("[MouthCoords] Posting to backend:", { avatarId, coords });
+
+    const response: any = await api.post(
+      `${AVATARS_BASE}/${avatarId}/mouth-coords`,
+      coords,
+    );
+
+    console.log("[MouthCoords] Raw backend response:", response);
+
+    // The api wrapper returns the JSON body: { success, message, data: { avatar } }
+    // We need to dig into data.avatar to get the actual Avatar document.
+    const avatar = response?.data?.avatar || response?.avatar;
+
+    if (!avatar) {
+      console.error(
+        "[MouthCoords] Backend did not return avatar in response:",
+        response,
+      );
+      throw new Error("Backend response missing avatar");
+    }
+
+    console.log("[MouthCoords] Saved successfully. Avatar:", avatar);
+    console.log("[MouthCoords] Stored mouthCoords:", avatar.mouthCoords);
+
+    return avatar;
+  } catch (error: any) {
+    console.error(
+      "[MouthCoords] Save failed:",
+      error?.response?.data || error?.message || error,
+    );
     throw error;
   }
 };

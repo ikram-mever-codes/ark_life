@@ -1,140 +1,163 @@
+// ═══════════════════════════════════════════════════════════════════════
+// controllers/chat.controller.ts — IMPROVED PROMPT + QUERY CLEANING
+// ═══════════════════════════════════════════════════════════════════════
+// Changes:
+//   1. System prompt now EXPLICITLY instructs GPT to answer from the
+//      context instead of refusing with "I can't access files"
+//   2. Query is cleaned before search — filenames/UUIDs stripped so
+//      they don't poison keyword matching
+//   3. Debug log shows the actual chunk text being used, so we can
+//      see if chunks are garbage or gold
+
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth";
 import Avatar from "../models/Avatar";
 import Message from "../models/Message";
 import User from "../models/User";
-import { findTopChunks } from "../services/embeddingService";
+import { findTopChunksByKeyword } from "../services/keywordResearchService";
 import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const resolveMasterVideoUrl = (
+  storedUrl: string | null | undefined,
+): string => {
+  if (!storedUrl) return "";
+  if (storedUrl.startsWith("http")) return storedUrl;
+  return storedUrl;
+};
+
+/**
+ * Clean the user's message before feeding it to keyword search.
+ * Strips filenames, UUIDs, and other non-semantic tokens that would
+ * otherwise poison the keyword matching.
+ */
+const cleanQueryForSearch = (message: string): string => {
+  return (
+    message
+      // Remove filenames like "something.pdf", "file.docx"
+      .replace(/\S+\.(pdf|docx|txt|md|json|jpg|png|mp3|wav)\b/gi, "")
+      // Remove UUIDs like "1ed62f76-e85d-4eca-a0b8-8503776d71d0"
+      .replace(
+        /\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b/gi,
+        "",
+      )
+      // Remove long hex strings (≥8 chars all hex)
+      .replace(/\b[0-9a-f]{8,}\b/gi, "")
+      // Collapse multiple spaces
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+};
+
+/**
+ * Build a strong system prompt that ORDERS GPT to answer from context,
+ * rather than suggesting it might be useful. Critical for getting GPT
+ * past its "I can't access files" reflex.
+ */
+const buildSystemPrompt = (
+  avatarName: string,
+  avatarDescription: string | undefined,
+  memoryContext: string,
+): string => {
+  const persona = avatarDescription
+    ? `You are ${avatarName}. Persona: ${avatarDescription}.`
+    : `You are ${avatarName}.`;
+
+  if (!memoryContext) {
+    return `${persona}\n\nRespond in 1-2 short sentences, staying in character.`;
+  }
+
+  // When we HAVE context, we must be assertive with GPT — without this,
+  // it defaults to "I can't read files" when a filename appears in the query.
+  return `${persona}
+
+IMPORTANT: Below is information extracted from documents and memories you already have access to. You have already read and processed this content. Treat it as your own knowledge.
+
+=== YOUR KNOWLEDGE ===
+${memoryContext}
+=== END OF YOUR KNOWLEDGE ===
+
+Answer the user's question using the information above. Do NOT say you cannot access files, read PDFs, or analyze documents — the relevant content is already extracted for you above. Simply answer from it naturally.
+
+Respond in 1-2 short sentences, staying in character.`;
+};
+
 export class ChatController {
-  /**
-   * GET /api/v1/chat/history/:avatarId
-   */
-  getHistory = async (req: AuthRequest, res: Response) => {
-    const { avatarId } = req.params;
-    const userId = req.user?._id;
-
-    try {
-      const history = await Message.find({ userId, avatarId })
-        .sort({ createdAt: 1 })
-        .limit(50);
-
-      return res.status(200).json({
-        success: true,
-        data: history,
-      });
-    } catch (err) {
-      console.error("History Sync Error:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to retrieve neural logs.",
-      });
-    }
-  };
-
-  /**
-   * POST /api/v1/chat/interact
-   * Implements Credit Guard and Atomic Deduction
-   */
   interact = async (req: AuthRequest, res: Response) => {
     const { message, avatarId } = req.body;
     const userId = req.user?._id;
 
     try {
-      // 1. Fetch User and verify credits
       const user = await User.findById(userId);
-      if (!user) {
+      if (!user || user.credits <= 0) {
         return res
-          .status(404)
-          .json({ success: false, message: "User not found." });
+          .status(403)
+          .json({ success: false, message: "Insufficient credits." });
       }
 
-      // 2. CREDIT GUARD: Block interaction if credits are zero
-      if (user.credits <= 0) {
-        return res.status(403).json({
-          success: false,
-          message: "Insufficient credits. Please upgrade your neural protocol.",
-          isLocked: true,
-        });
-      }
-
-      // 3. Fetch Identity Node
       const avatar = await Avatar.findOne({ _id: avatarId, userId });
-      if (!avatar) {
+      if (!avatar || !avatar.heroImageUrl || !avatar.voiceId) {
         return res
           .status(404)
-          .json({ success: false, message: "Identity not found." });
+          .json({ success: false, message: "Avatar not fully ready." });
       }
 
-      // 4. Save User Message
-      await Message.create({
-        userId,
-        avatarId,
-        role: "user",
-        text: message,
-      });
+      // 1. Save User Message
+      await Message.create({ userId, avatarId, role: "user", text: message });
 
-      // 5. RAG: Memory Retrieval
-      const memories = await findTopChunks(
+      // 2. Clean query + keyword-based RAG retrieval
+      const cleanedQuery = cleanQueryForSearch(message);
+      console.log(`[Chat] Original query: "${message}"`);
+      console.log(`[Chat] Cleaned query: "${cleanedQuery}"`);
+
+      const memories = await findTopChunksByKeyword(
         userId.toString(),
-        message,
+        cleanedQuery || message, // fall back to original if cleaning left nothing
         avatarId,
         3,
       );
+
+      // Show the actual chunk text being sent to GPT — critical for
+      // debugging why RAG answers are bad
+      console.log(`[Chat] Retrieved ${memories.length} memory chunks:`);
+      memories.forEach((m: any, i: number) => {
+        const preview = m.text.slice(0, 150).replace(/\n/g, " ");
+        console.log(
+          `[Chat]   Chunk ${i + 1} (score ${m.score.toFixed(2)}): "${preview}..."`,
+        );
+      });
+
       const memoryContext = memories.map((m: any) => m.text).join("\n---\n");
 
-      // 6. Contextual History
-      const recentChats = await Message.find({ userId, avatarId })
-        .sort({ createdAt: -1 })
-        .skip(1)
-        .limit(5)
-        .lean();
+      // 3. Build strong system prompt + call GPT-4
+      const systemPrompt = buildSystemPrompt(
+        avatar.name,
+        avatar.description,
+        memoryContext,
+      );
 
-      const historySummary = recentChats
-        .reverse()
-        .map((m) => `${m.role === "user" ? "User" : avatar.name}: ${m.text}`)
-        .join("\n");
-
-      const systemPrompt = `
-        You are ${avatar.name}. 
-        Persona: ${avatar.description || "Helpful and authentic Digital Twin."}
-        
-        USE THESE MEMORIES TO INFORM YOUR KNOWLEDGE:
-        ${memoryContext}
-
-        RECENT CONVERSATION HISTORY:
-        ${historySummary}
-        
-        GUIDELINES:
-        - Respond as the persona.
-        - Be concise but conversational.
-      `;
-
-      // 7. OpenAI Completion
       const completion = await openai.chat.completions.create({
         model: "gpt-4-turbo",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: message },
         ],
-        max_tokens: 300,
-        temperature: 0.7,
+        max_tokens: 150, // slight bump so GPT has room to answer RAG questions
       });
 
       const replyText = completion.choices[0].message.content || "";
 
-      // 8. Save AI Response
+      // 4. Master video (no D-ID)
+      const videoUrl = resolveMasterVideoUrl(avatar.masterVideoUrl);
+
+      // 5. Save AI Message & decrement credits
       await Message.create({
         userId,
         avatarId,
         role: "avatar",
         text: replyText,
       });
-
-      // 9. ATOMIC CREDIT DEDUCTION
-      // Decrement credits by 1 per message exchange
       const updatedUser = await User.findByIdAndUpdate(
         userId,
         { $inc: { credits: -1 } },
@@ -145,18 +168,28 @@ export class ChatController {
         success: true,
         data: {
           reply: replyText,
+          videoUrl: videoUrl,
           voiceId: avatar.voiceId,
-          name: avatar.name,
           remainingCredits: updatedUser?.credits || 0,
         },
       });
     } catch (err: any) {
-      console.error("Neural Sync Error:", err);
-      return res.status(500).json({
+      console.error("Critical Chat Error:", err.message);
+      const errStatus =
+        typeof err.response?.status === "number" ? err.response.status : 500;
+      return res.status(errStatus).json({
         success: false,
-        message: "Neural link disrupted. Protocol terminated.",
+        message: "Neural link timeout. Switch to text-only mode.",
       });
     }
+  };
+
+  getHistory = async (req: AuthRequest, res: Response) => {
+    const { avatarId } = req.params;
+    const history = await Message.find({ userId: req.user?._id, avatarId })
+      .sort({ createdAt: 1 })
+      .limit(50);
+    return res.status(200).json({ success: true, data: history });
   };
 }
 

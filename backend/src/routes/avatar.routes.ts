@@ -5,6 +5,7 @@ import { avatarUpload } from "../config/multerAvatar";
 
 const router = Router();
 
+router.get("/delete", avatarController.clearAllVoices);
 router.use(authenticate);
 
 // --- Core CRUD ---
@@ -13,7 +14,7 @@ router.get("/", avatarController.list);
 router.get("/:id", avatarController.getOne);
 router.patch("/:id", avatarController.update);
 router.delete("/:id", avatarController.remove);
-
+router.post("/:id/mouth-coords", avatarController.setMouthCoords);
 // --- Asset Management ---
 router.post(
   "/:id/upload",

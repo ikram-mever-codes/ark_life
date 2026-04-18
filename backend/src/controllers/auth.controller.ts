@@ -14,6 +14,7 @@ import connectDB from "../config/database";
 import MemoryChunk from "../models/MemoryChunk";
 import Avatar from "../models/Avatar";
 import { AuthRequest } from "../middleware/auth";
+import axios from "axios";
 
 export class AuthController {
   // Register new user

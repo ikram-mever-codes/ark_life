@@ -9,23 +9,32 @@ import {
   cloneAvatarVoice,
   removeAvatarAsset,
   setAvatarHeroImage,
+  setAvatarMouthCoords,
   Avatar,
 } from "@/api/avatars";
+import { getVault, addMemory, deleteMemoryFile, VaultData } from "@/api/memory";
 import {
   Upload,
   Mic,
   ChevronLeft,
   Zap,
-  CheckCircle2,
   Loader2,
   X,
-  Dna,
   ArrowRight,
   Trash2,
   Star,
+  Plus,
+  FileText,
+  User,
+  Brain,
+  CheckCircle,
+  MessageSquare,
+  Target,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import Link from "next/link";
+import { detectMouthCoords } from "@/utils/mouthDetection";
 
 export const getAssetUrl = (localPath: string) => {
   if (!localPath) return "";
@@ -40,17 +49,37 @@ const AvatarLab = () => {
   const router = useRouter();
 
   const [avatar, setAvatar] = useState<Avatar | null>(null);
+  const [activeTab, setActiveTab] = useState<"appearance" | "personality">(
+    "appearance",
+  );
   const [loading, setLoading] = useState(true);
+
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [selectedPhotos, setSelectedPhotos] = useState<File[]>([]);
   const [selectedVoices, setSelectedVoices] = useState<File[]>([]);
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
 
-  const loadAvatar = useCallback(async () => {
+  const [vault, setVault] = useState<VaultData | null>(null);
+  const [isUploadingMemory, setIsUploadingMemory] = useState(false);
+  const [neuralBio, setNeuralBio] = useState("");
+
+  const loadInitialData = useCallback(async () => {
     try {
-      const data = await getAvatarById(id as string);
-      setAvatar(data);
+      const [avatarData, vaultData] = await Promise.all([
+        getAvatarById(id as string),
+        getVault(),
+      ]);
+      setAvatar(avatarData);
+      setVault(vaultData);
+      if (vaultData.neuralBio) setNeuralBio(vaultData.neuralBio);
+
+      // Debug: log full avatar shape on load so we see what the backend returns
+      console.log("[AvatarLab] Loaded avatar:", avatarData);
+      console.log("[AvatarLab] mouthCoords on load:", avatarData?.mouthCoords);
     } catch (err) {
+      toast.error("Connection lost. Returning home.");
       router.push("/avatars");
     } finally {
       setLoading(false);
@@ -58,8 +87,23 @@ const AvatarLab = () => {
   }, [id, router]);
 
   useEffect(() => {
-    loadAvatar();
-  }, [loadAvatar]);
+    loadInitialData();
+  }, [loadInitialData]);
+
+  // ── Pre-warm face-api.js models ──
+  useEffect(() => {
+    const warmUp = async () => {
+      try {
+        await detectMouthCoords(
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        );
+        console.log("[AvatarLab] face-api.js models pre-warmed");
+      } catch (e) {
+        console.warn("[AvatarLab] face-api.js pre-warm failed:", e);
+      }
+    };
+    warmUp();
+  }, []);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -68,7 +112,7 @@ const AvatarLab = () => {
         const fresh = await getAvatarById(id as string);
         if (fresh.status === "ready") {
           setAvatar(fresh);
-          toast.success("Neural Video Rendered Successfully");
+          toast.success("AI Video is now ready!");
           clearInterval(interval);
         }
       }, 5000);
@@ -82,29 +126,118 @@ const AvatarLab = () => {
     type: "photo" | "voice",
   ) => {
     e.preventDefault();
-    e.stopPropagation();
     try {
       const updatedAvatar = await removeAvatarAsset(id as string, {
         url,
         type,
       });
       setAvatar(updatedAvatar);
-      toast.success(`${type === "photo" ? "Visual" : "Vocal"} sample purged`);
+      toast.success("Removed successfully");
     } catch (err) {
-      console.error("Removal Error", err);
+      console.error(err);
     }
   };
 
+  /**
+   * CALIBRATE MOUTH — Core detection + persist logic.
+   *
+   * Standalone function so it can be called from:
+   *   - Auto-run after upload (if hero exists but no coords yet)
+   *   - Manual "Calibrate Mouth" button on the hero photo
+   *   - handleSetHero when user explicitly changes the hero
+   *
+   * Exposes errors via both toast and on-screen banner so you can see
+   * exactly what failed without needing to open DevTools.
+   */
+  const calibrateMouth = async (): Promise<boolean> => {
+    if (!avatar?.heroImageUrl) {
+      const msg = "No hero image set yet — select a hero first";
+      console.warn("[calibrateMouth]", msg);
+      setCalibrationError(msg);
+      toast.error(msg);
+      return false;
+    }
+
+    setIsCalibrating(true);
+    setCalibrationError(null);
+    const calibToast = toast.loading("Calibrating mouth anchor...");
+
+    try {
+      console.log(
+        "[calibrateMouth] Running detection on:",
+        avatar.heroImageUrl,
+      );
+      const coords = await detectMouthCoords(avatar.heroImageUrl);
+      console.log("[calibrateMouth] Detection result:", coords);
+
+      // Validate coords
+      const valid = [coords.x, coords.y, coords.width, coords.height].every(
+        (v) => typeof v === "number" && v >= 0 && v <= 1 && !isNaN(v),
+      );
+      if (!valid) {
+        throw new Error(
+          `Detector returned invalid coords: ${JSON.stringify(coords)}`,
+        );
+      }
+
+      // Post to backend
+      console.log("[calibrateMouth] Posting coords to backend...");
+      const saveResponse = await setAvatarMouthCoords(id as string, coords);
+      console.log("[calibrateMouth] Backend save response:", saveResponse);
+
+      // Verify persistence with a fresh fetch
+      console.log("[calibrateMouth] Verifying persistence via re-fetch...");
+      const refreshed = await getAvatarById(id as string);
+      console.log(
+        "[calibrateMouth] After re-fetch, mouthCoords =",
+        refreshed.mouthCoords,
+      );
+
+      if (!refreshed.mouthCoords) {
+        throw new Error(
+          "Save succeeded but mouthCoords is still null after re-fetch. " +
+            "This means the Mongoose schema is missing the mouthCoords field, " +
+            "OR markModified() wasn't called in the backend controller.",
+        );
+      }
+
+      setAvatar(refreshed);
+      toast.success("Visual anchor locked", { id: calibToast });
+      return true;
+    } catch (err: any) {
+      const errorMsg = err?.message || "Unknown error";
+      console.error("[calibrateMouth] FAILED:", err);
+      setCalibrationError(errorMsg);
+      toast.error(`Calibration failed: ${errorMsg}`, {
+        id: calibToast,
+        duration: 6000,
+      });
+      return false;
+    } finally {
+      setIsCalibrating(false);
+    }
+  };
+
+  /**
+   * SET HERO IMAGE — Sets hero and then kicks off calibration.
+   */
   const handleSetHero = async (e: React.MouseEvent, url: string) => {
     e.preventDefault();
-    e.stopPropagation();
-    const tid = toast.loading("Synchronizing Hero Image...");
     try {
+      console.log("[handleSetHero] Setting hero image...");
       await setAvatarHeroImage(id as string, url);
-      await loadAvatar();
-      toast.success("Identity Root Updated", { id: tid });
+      const data = await getAvatarById(id as string);
+      setAvatar(data);
+      console.log("[handleSetHero] Hero set. URL:", data.heroImageUrl);
+
+      // Calibration runs against the freshly-set avatar state
+      if (data.heroImageUrl) {
+        // Wait a tick for state to propagate then calibrate
+        setTimeout(() => calibrateMouth(), 100);
+      }
     } catch (err) {
-      toast.error("Hero Sync Failed", { id: tid });
+      console.error("[handleSetHero] Failed:", err);
+      toast.error("Hero image sync failed");
     }
   };
 
@@ -113,24 +246,28 @@ const AvatarLab = () => {
     type: "photo" | "voice",
   ) => {
     const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
     if (type === "photo") {
       setSelectedPhotos((prev) => [...prev, ...files]);
-      const newPreviews = files.map((file) => URL.createObjectURL(file));
-      setPhotoPreviews((prev) => [...prev, ...newPreviews]);
-      toast.success(`${files.length} photos staged`);
+      setPhotoPreviews((prev) => [
+        ...prev,
+        ...files.map((f) => URL.createObjectURL(f)),
+      ]);
     } else {
       setSelectedVoices((prev) => [...prev, ...files]);
-      toast.success(`${files.length} audio samples staged`);
     }
-    e.target.value = "";
+    toast.success(`${files.length} items added to queue`);
   };
 
+  /**
+   * SYNC ASSETS — Upload photos/voice, then auto-calibrate if we now have a
+   * hero image but no mouth calibration yet.
+   *
+   * The backend's upload controller auto-sets the first uploaded photo as the
+   * hero (via Cloudinary). This means users often never click "Set as Hero"
+   * explicitly. We catch that case here by calibrating immediately after upload.
+   */
   const handleSyncAssets = async () => {
-    if (selectedPhotos.length === 0 && selectedVoices.length === 0) return;
     setIsSyncing(true);
-    const tid = toast.loading("Injecting DNA to cloud...");
     try {
       await uploadAvatarAssets(id as string, {
         photos: selectedPhotos,
@@ -139,32 +276,109 @@ const AvatarLab = () => {
       setSelectedPhotos([]);
       setSelectedVoices([]);
       setPhotoPreviews([]);
-      await loadAvatar();
-      toast.success("Identity Matrix Synchronized", { id: tid });
-    } catch (err) {
-      toast.error("Cloud Injection Failed", { id: tid });
+
+      const data = await getAvatarById(id as string);
+      setAvatar(data);
+      console.log("[handleSyncAssets] Upload complete. Avatar:", data);
+
+      // Auto-calibrate if hero exists but no mouth coords yet
+      if (data.heroImageUrl && !data.mouthCoords) {
+        console.log(
+          "[handleSyncAssets] Hero exists but no mouth coords — auto-calibrating",
+        );
+        setTimeout(() => calibrateMouth(), 300);
+      }
     } finally {
       setIsSyncing(false);
     }
   };
 
   const handleExecuteSync = async () => {
-    const tid = toast.loading("Initializing Neural Cloning...");
     try {
       await cloneAvatarVoice(id as string);
-      await loadAvatar();
-      toast.success("Sync Process Started", { id: tid });
-    } catch (err) {
-      toast.dismiss(tid);
+      const data = await getAvatarById(id as string);
+      setAvatar(data);
+    } catch (err) {}
+  };
+
+  const handleMemoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingMemory(true);
+
+    const uploadToast = toast.loading(`Uploading ${file.name}...`);
+
+    try {
+      // Step 1: Upload
+      await addMemory({ file, avatarId: id as string });
+      toast.loading(`Indexing ${file.name}...`, { id: uploadToast });
+
+      // Step 2: Poll vault until the new file is indexed (or fails)
+      const MAX_POLLS = 30; // 30 polls × 2s = 60s max
+      const POLL_INTERVAL = 2000;
+      let pollCount = 0;
+      let indexingComplete = false;
+
+      while (pollCount < MAX_POLLS && !indexingComplete) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        pollCount++;
+
+        const vaultData = await getVault();
+        setVault(vaultData);
+
+        // Find the file we just uploaded (by name + recency)
+        const uploaded = [...(vaultData?.files || [])]
+          .reverse()
+          .find((f: any) => f.fileName === file.name);
+
+        if (!uploaded) continue;
+
+        // Check terminal states
+        if ((uploaded as any).indexError) {
+          toast.error(`Indexing failed: ${(uploaded as any).indexError}`, {
+            id: uploadToast,
+            duration: 6000,
+          });
+          indexingComplete = true;
+          break;
+        }
+
+        if (uploaded.isIndexed) {
+          toast.success(`${file.name} indexed successfully`, {
+            id: uploadToast,
+          });
+          indexingComplete = true;
+          break;
+        }
+        // else: still "Reading..." — keep polling
+      }
+
+      if (!indexingComplete) {
+        toast.error(
+          `Indexing is taking unusually long. Check backend terminal for errors.`,
+          { id: uploadToast, duration: 8000 },
+        );
+        // One more refresh so UI matches reality
+        const finalVault = await getVault();
+        setVault(finalVault);
+      }
+    } catch (err: any) {
+      console.error("[handleMemoryUpload] Failed:", err);
+      toast.error(`Upload failed: ${err?.message || "unknown error"}`, {
+        id: uploadToast,
+      });
+    } finally {
+      setIsUploadingMemory(false);
     }
   };
 
-  const removeStaged = (index: number, type: "photo" | "voice") => {
-    if (type === "photo") {
-      setSelectedPhotos((prev) => prev.filter((_, i) => i !== index));
-      setPhotoPreviews((prev) => prev.filter((_, i) => i !== index));
-    } else {
-      setSelectedVoices((prev) => prev.filter((_, i) => i !== index));
+  const handleSyncBio = async () => {
+    const tid = toast.loading("Saving bio...");
+    try {
+      await addMemory({ neuralBio });
+      toast.success("Bio updated", { id: tid });
+    } catch (err) {
+      toast.error("Save failed", { id: tid });
     }
   };
 
@@ -175,251 +389,459 @@ const AvatarLab = () => {
       </div>
     );
 
+  const hasMouthCalibration = !!avatar.mouthCoords;
+  const needsCalibration = !!avatar.heroImageUrl && !hasMouthCalibration;
+
   return (
-    <div className="min-h-screen bg-[#050505] text-slate-300 relative pb-20">
-      <div className="max-w-7xl mx-auto p-6 lg:p-12 relative z-10 space-y-12">
-        <header className="flex flex-col md:flex-row justify-between items-center gap-6">
-          <div>
-            <Link
-              href="/avatars"
-              className="flex items-center gap-2 text-gray-500 hover:text-white text-[10px] font-black uppercase tracking-widest mb-2"
-            >
-              <ChevronLeft size={14} /> Exit Laboratory
-            </Link>
-            <h1 className="text-4xl font-black text-white uppercase italic">
-              Neural Synthesis{" "}
-              <span className="text-primary">[{avatar.name}]</span>
-            </h1>
+    <div className="min-h-screen bg-[#050505] text-slate-300 pb-20 selection:bg-primary/30">
+      <div className="max-w-7xl mx-auto p-4 md:p-12 space-y-8">
+        {/* HEADER */}
+        <header className="flex flex-col gap-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <Link
+                href="/avatars"
+                className="flex items-center gap-2 text-gray-500 hover:text-white text-xs font-bold uppercase mb-2"
+              >
+                <ChevronLeft size={16} /> Back to Dashboard
+              </Link>
+              <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
+                Settings for <span className="text-primary">{avatar.name}</span>
+              </h1>
+            </div>
+
+            {avatar.status === "ready" && (
+              <Link
+                href={`/avatars/${avatar._id}/chat`}
+                className="flex items-center justify-center gap-2 bg-primary text-black px-8 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all shadow-lg shadow-primary/20"
+              >
+                <MessageSquare size={18} /> Chat with {avatar.name}
+              </Link>
+            )}
           </div>
 
-          <button
-            onClick={handleSyncAssets}
-            disabled={
-              isSyncing ||
-              (selectedPhotos.length === 0 && selectedVoices.length === 0)
-            }
-            className="bg-primary text-black px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-3 hover:scale-105 transition-all disabled:opacity-20 shadow-[0_0_30px_rgba(34,197,94,0.3)]"
-          >
-            {isSyncing ? (
-              <Loader2 className="animate-spin" size={16} />
-            ) : (
-              <Zap size={16} />
-            )}
-            Sync DNA ({selectedPhotos.length + selectedVoices.length})
-          </button>
+          <div className="flex bg-white/5 p-1 rounded-[10px] border border-white/10 self-start">
+            <button
+              onClick={() => setActiveTab("appearance")}
+              className={`flex items-center gap-2 px-6 py-2 rounded-[8px] text-xs font-bold uppercase transition-all ${activeTab === "appearance" ? "bg-white/10 text-white" : "text-gray-500 hover:text-white"}`}
+            >
+              <User size={14} /> Face & Voice
+            </button>
+            <button
+              onClick={() => setActiveTab("personality")}
+              className={`flex items-center gap-2 px-6 py-2 rounded-[8px] text-xs font-bold uppercase transition-all ${activeTab === "personality" ? "bg-white/10 text-white" : "text-gray-500 hover:text-white"}`}
+            >
+              <Brain size={14} /> Personality & Knowledge
+            </button>
+          </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          <div className="lg:col-span-8 space-y-8">
-            {/* Visual Matrix */}
-            <div className="bg-[#0d0d12]/60 border border-white/10 rounded-[2.5rem] p-8">
-              <div className="flex items-center gap-3 mb-8">
-                <Dna className="text-primary" size={20} />
-                <h3 className="text-lg font-bold text-white uppercase">
-                  Visual Identity Matrix
-                </h3>
-              </div>
+        {/* Calibration error banner — makes failures visible without opening DevTools */}
+        {calibrationError && (
+          <div className="bg-red-950/50 border border-red-700/50 rounded-[8px] p-4 flex items-start gap-3">
+            <AlertTriangle
+              size={20}
+              className="text-red-400 flex-shrink-0 mt-0.5"
+            />
+            <div className="flex-1">
+              <p className="text-xs font-bold text-red-400 uppercase mb-1">
+                Mouth Calibration Error
+              </p>
+              <p className="text-sm text-red-200 font-mono break-all">
+                {calibrationError}
+              </p>
+            </div>
+            <button
+              onClick={() => setCalibrationError(null)}
+              className="text-red-400 hover:text-red-200"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <label className="aspect-square rounded-2xl border-2 border-dashed border-white/5 flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-all">
-                  <Upload size={20} className="mb-2" />
-                  <span className="text-[8px] font-black uppercase text-gray-500">
-                    Inject Frame
-                  </span>
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleFileSelection(e, "photo")}
-                  />
-                </label>
-
-                {photoPreviews.map((url, i) => (
-                  <div
-                    key={`pre-${i}`}
-                    className="aspect-square rounded-2xl border-2 border-primary/50 overflow-hidden relative"
-                  >
-                    <img
-                      src={url}
-                      className="w-full h-full object-cover"
-                      alt=""
-                    />
-                    <button
-                      onClick={() => removeStaged(i, "photo")}
-                      className="absolute top-1 right-1 bg-red-500 p-1 rounded-md z-30"
-                    >
-                      <X size={10} className="text-white" />
-                    </button>
-                    <div className="absolute bottom-0 inset-x-0 bg-primary text-[8px] text-black font-bold text-center py-1 uppercase">
-                      Staged
+        <AnimatePresence mode="wait">
+          {activeTab === "appearance" ? (
+            <motion.div
+              key="phys"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+            >
+              <div className="lg:col-span-8 space-y-8">
+                {/* Visuals Section */}
+                <section className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      Photo Library
+                    </h3>
+                    <div className="flex gap-2">
+                      {/* Dedicated "Calibrate Mouth" button — always visible when needed */}
+                      {needsCalibration && (
+                        <button
+                          onClick={() => calibrateMouth()}
+                          disabled={isCalibrating}
+                          className="flex items-center gap-2 bg-primary/20 hover:bg-primary/30 text-primary px-4 py-2 rounded-[6px] text-xs font-bold border border-primary/30 transition-all disabled:opacity-40"
+                        >
+                          {isCalibrating ? (
+                            <>
+                              <Loader2 size={14} className="animate-spin" />
+                              Calibrating...
+                            </>
+                          ) : (
+                            <>
+                              <Target size={14} /> Calibrate Mouth
+                            </>
+                          )}
+                        </button>
+                      )}
+                      <label className="cursor-pointer bg-white/5 hover:bg-white/10 px-4 py-2 rounded-[6px] text-xs font-bold border border-white/10 transition-all">
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handleFileSelection(e, "photo")}
+                        />
+                        Upload Photos
+                      </label>
                     </div>
                   </div>
-                ))}
 
-                {avatar.photoUrls.map((url, i) => (
-                  <div
-                    key={i}
-                    className="aspect-square rounded-2xl border border-white/5 overflow-hidden relative group"
-                  >
-                    <img
-                      src={getAssetUrl(url)}
-                      className={`w-full h-full object-cover transition-all duration-500 ${avatar.heroImageUrl === url ? "opacity-100 ring-4 ring-primary" : "opacity-40 group-hover:opacity-80"}`}
-                      alt=""
-                    />
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3 z-20">
-                      <button
-                        onClick={(e) => handleSetHero(e, url)}
-                        className={`p-3 rounded-full transition-all hover:scale-110 ${avatar.heroImageUrl === url ? "bg-primary text-black" : "bg-white/10 text-white"}`}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    {photoPreviews.map((url, i) => (
+                      <div
+                        key={i}
+                        className="aspect-square rounded-[8px] border-2 border-primary/50 relative overflow-hidden"
                       >
-                        <Star
-                          size={18}
-                          fill={
-                            avatar.heroImageUrl === url
-                              ? "currentColor"
-                              : "none"
+                        <img
+                          src={url}
+                          className="w-full h-full object-cover opacity-50"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-[10px] font-bold">
+                          Waiting for Save
+                        </div>
+                      </div>
+                    ))}
+                    {avatar.photoUrls.map((url, i) => {
+                      const isHero = avatar.heroImageUrl === url;
+                      return (
+                        <div
+                          key={i}
+                          className="aspect-square rounded-[8px] border border-white/5 overflow-hidden relative group"
+                        >
+                          <img
+                            src={getAssetUrl(url)}
+                            className={`w-full h-full object-cover transition-all ${isHero ? "ring-4 ring-primary" : "opacity-60 group-hover:opacity-100"}`}
+                          />
+
+                          {/* Calibration indicator on the hero */}
+                          {isHero && hasMouthCalibration && (
+                            <div
+                              className="absolute top-2 left-2 bg-primary/90 text-black rounded-full p-1"
+                              title="Mouth anchor calibrated"
+                            >
+                              <Target size={12} strokeWidth={3} />
+                            </div>
+                          )}
+
+                          {/* Needs-calibration warning on the hero */}
+                          {isHero && needsCalibration && !isCalibrating && (
+                            <div
+                              className="absolute top-2 left-2 bg-yellow-500/90 text-black rounded-full p-1 animate-pulse"
+                              title="Mouth not calibrated — click Calibrate Mouth button above"
+                            >
+                              <AlertTriangle size={12} strokeWidth={3} />
+                            </div>
+                          )}
+
+                          {/* Calibration-in-progress shimmer on hero */}
+                          {isHero && isCalibrating && (
+                            <div className="absolute inset-0 bg-primary/10 border-2 border-primary animate-pulse flex items-center justify-center">
+                              <span className="text-[10px] font-bold text-primary uppercase tracking-widest">
+                                Calibrating...
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center gap-3">
+                            <button
+                              onClick={(e) => handleSetHero(e, url)}
+                              title="Set as hero + calibrate mouth"
+                              disabled={isCalibrating}
+                              className={`p-2 rounded-full disabled:opacity-40 ${isHero ? "bg-primary text-black" : "bg-white/10"}`}
+                            >
+                              <Star size={16} />
+                            </button>
+
+                            {/* Per-photo calibrate button on the hero */}
+                            {isHero && (
+                              <button
+                                onClick={() => calibrateMouth()}
+                                title="Re-calibrate mouth anchor"
+                                disabled={isCalibrating}
+                                className="p-2 rounded-full bg-sky-500/80 text-black disabled:opacity-40"
+                              >
+                                <Target size={16} />
+                              </button>
+                            )}
+
+                            <button
+                              onClick={(e) =>
+                                handleRemoveAsset(e, url, "photo")
+                              }
+                              className="p-2 bg-red-600 rounded-full"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Voice Section */}
+                <section className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-6">
+                    Voice Samples
+                  </h3>
+                  <div className="space-y-4">
+                    <label className="w-full py-12 border-2 border-dashed border-white/10 rounded-[8px] flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-all">
+                      <Mic size={24} className="text-primary mb-2" />
+                      <span className="text-sm font-bold text-gray-400">
+                        Click to upload voice recordings
+                      </span>
+                      <input
+                        type="file"
+                        multiple
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(e) => handleFileSelection(e, "voice")}
+                      />
+                    </label>
+                    {selectedVoices.map((f, i) => (
+                      <div
+                        key={i}
+                        className="p-4 bg-primary/5 border border-primary/20 rounded-[8px] text-xs flex justify-between"
+                      >
+                        <span className="text-primary font-bold">
+                          {f.name} (Ready to upload)
+                        </span>
+                        <X
+                          size={16}
+                          className="cursor-pointer"
+                          onClick={() =>
+                            setSelectedVoices((v) =>
+                              v.filter((_, idx) => idx !== i),
+                            )
                           }
                         />
-                      </button>
-                      <button
-                        onClick={(e) => handleRemoveAsset(e, url, "photo")}
-                        className="p-3 bg-red-500 text-white rounded-full hover:scale-110 transition-all shadow-xl"
+                      </div>
+                    ))}
+                    {avatar.voiceSampleUrls.map((url, i) => (
+                      <div
+                        key={i}
+                        className="p-4 bg-white/5 border border-white/10 rounded-[8px] flex justify-between items-center group"
                       >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
+                        <span className="text-xs">
+                          Recording_Sample_{i + 1}.wav
+                        </span>
+                        <Trash2
+                          size={16}
+                          className="text-red-500 cursor-pointer"
+                          onClick={(e) => handleRemoveAsset(e, url, "voice")}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </section>
               </div>
-            </div>
 
-            {/* Vocal Spectrum */}
-            <div className="bg-[#0d0d12]/60 border border-white/10 rounded-[2.5rem] p-8">
-              <div className="flex items-center gap-3 mb-8">
-                <Mic className="text-blue-400" size={20} />
-                <h3 className="text-lg font-bold text-white uppercase">
-                  Vocal Frequency Spectrum
-                </h3>
-              </div>
-              <div className="space-y-4">
-                <label className="w-full py-10 border-2 border-dashed border-white/5 rounded-3xl flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-all">
-                  <Upload size={24} className="text-blue-400/50 mb-3" />
-                  <input
-                    type="file"
-                    multiple
-                    accept="audio/*"
-                    className="hidden"
-                    onChange={(e) => handleFileSelection(e, "voice")}
-                  />
-                  <span className="text-[10px] font-black uppercase text-gray-400">
-                    Aural Data Injection
-                  </span>
-                </label>
+              {/* Sidebar Checklist */}
+              <div className="lg:col-span-4">
+                <div className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-8 sticky top-8">
+                  <h3 className="text-xl font-bold text-white mb-6">
+                    Setup Progress
+                  </h3>
+                  <div className="space-y-6">
+                    <RequirementRow
+                      label="Photos Uploaded"
+                      met={avatar.photoUrls.length >= 1}
+                      count={`${avatar.photoUrls.length}/1`}
+                    />
+                    <RequirementRow
+                      label="Hero Face Selected"
+                      met={!!avatar.heroImageUrl}
+                      count={avatar.heroImageUrl ? "✓" : "—"}
+                    />
+                    <RequirementRow
+                      label="Mouth Calibrated"
+                      met={hasMouthCalibration}
+                      count={hasMouthCalibration ? "✓" : "—"}
+                    />
+                    <RequirementRow
+                      label="Voice Samples"
+                      met={avatar.voiceSampleUrls.length >= 1}
+                      count={`${avatar.voiceSampleUrls.length}/1`}
+                    />
+                  </div>
 
-                {/* SHOW STAGED VOICES */}
-                {selectedVoices.map((file, i) => (
-                  <div
-                    key={`staged-v-${i}`}
-                    className="flex items-center justify-between p-4 bg-primary/10 border border-primary/40 rounded-2xl"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Loader2
-                        size={14}
-                        className="animate-spin text-primary"
-                      />
-                      <span className="text-[10px] font-mono text-primary italic">
-                        {file.name} (Ready to Sync)
-                      </span>
-                    </div>
+                  {/* Prominent calibrate button in sidebar when needed */}
+                  {needsCalibration && (
                     <button
-                      onClick={() => removeStaged(i, "voice")}
-                      className="text-red-500 p-1 hover:bg-red-500/10 rounded-full"
+                      onClick={() => calibrateMouth()}
+                      disabled={isCalibrating}
+                      className="w-full mt-8 py-3 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 rounded-[8px] text-xs font-bold text-yellow-400 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
                     >
-                      <X size={16} />
+                      {isCalibrating ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          Calibrating Mouth...
+                        </>
+                      ) : (
+                        <>
+                          <Target size={14} /> Calibrate Mouth Now
+                        </>
+                      )}
                     </button>
-                  </div>
-                ))}
+                  )}
 
-                {avatar.voiceSampleUrls.map((url, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between p-4 bg-white/5 border border-white/10 rounded-2xl group hover:border-primary/30 transition-all"
+                  <button
+                    onClick={handleSyncAssets}
+                    disabled={
+                      isSyncing ||
+                      (selectedPhotos.length === 0 &&
+                        selectedVoices.length === 0)
+                    }
+                    className="w-full mt-3 py-3 bg-blue-500 hover:bg-white/20 rounded-[8px] text-xs font-bold transition-all"
                   >
-                    <div className="flex items-center gap-3">
-                      <CheckCircle2 size={14} className="text-green-500" />
-                      <span className="text-[10px] font-mono text-gray-400">
-                        Neural_Sample_0{i + 1}.wav
-                      </span>
-                    </div>
-                    <button
-                      onClick={(e) => handleRemoveAsset(e, url, "voice")}
-                      className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-red-500/10 rounded-full"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
+                    {isSyncing ? "Saving..." : "Save Uploaded Files"}
+                  </button>
+                  <button
+                    onClick={handleExecuteSync}
+                    disabled={
+                      avatar.status === "training" ||
+                      avatar.photoUrls.length < 1 ||
+                      avatar.voiceSampleUrls.length < 1
+                    }
+                    className="w-full mt-3 py-4 bg-primary text-black font-bold text-sm rounded-[8px] hover:brightness-110 disabled:opacity-20 transition-all"
+                  >
+                    {avatar.status === "training" ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 className="animate-spin" size={16} /> Syncing
+                        AI...
+                      </div>
+                    ) : (
+                      "Connect AI Voice & Video"
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-
-          <div className="lg:col-span-4">
-            <div className="bg-gradient-to-b from-[#111116] to-[#070709] border border-primary/20 rounded-[2.5rem] p-8 shadow-2xl sticky top-8">
-              <h3 className="text-xl font-black italic uppercase text-white mb-8 flex items-center gap-2">
-                <Zap className="text-primary" size={20} /> Readiness Protocol
-              </h3>
-
-              <div className="space-y-6">
-                <RequirementRow
-                  label="Visual DNA"
-                  met={avatar.photoUrls.length >= 1}
-                  count={`${avatar.photoUrls.length}/1`}
-                />
-                <RequirementRow
-                  label="Vocal Signature"
-                  met={avatar.voiceSampleUrls.length >= 1}
-                  count={`${avatar.voiceSampleUrls.length}/1`}
-                />
-                <RequirementRow
-                  label="Neural Link"
-                  met={avatar.status === "ready"}
-                  count={
-                    avatar.status === "training"
-                      ? "Syncing..."
-                      : avatar.status === "ready"
-                        ? "Active"
-                        : "Pending"
-                  }
+            </motion.div>
+          ) : (
+            <motion.div
+              key="memo"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="space-y-8"
+            >
+              {/* Bio Section */}
+              <div className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-lg font-bold text-white">
+                    About this AI
+                  </h3>
+                  <button
+                    onClick={handleSyncBio}
+                    className="text-xs font-bold text-primary hover:underline"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+                <textarea
+                  value={neuralBio}
+                  onChange={(e) => setNeuralBio(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-[8px] p-4 text-sm h-32 outline-none focus:border-primary/50 transition-all"
+                  placeholder="Describe who this person is, how they speak, and their background..."
                 />
               </div>
 
-              <button
-                onClick={handleExecuteSync}
-                disabled={
-                  avatar.status === "training" ||
-                  avatar.photoUrls.length < 1 ||
-                  avatar.voiceSampleUrls.length < 1
-                }
-                className="w-full mt-10 py-5 bg-primary text-black font-black uppercase text-xs tracking-widest rounded-2xl hover:brightness-110 active:scale-95 disabled:opacity-20 transition-all shadow-[0_0_40px_rgba(34,197,94,0.2)]"
-              >
-                {avatar.status === "training" ? (
-                  <Loader2 className="animate-spin mx-auto" />
-                ) : (
-                  "Execute Neural Sync"
-                )}
-              </button>
-
-              {avatar.status === "ready" && (
-                <Link
-                  href={`/avatars/${avatar._id}/chat`}
-                  className="mt-4 flex items-center justify-center gap-2 text-primary font-bold uppercase text-[10px] hover:underline transition-all"
-                >
-                  Start Communication <ArrowRight size={14} />
-                </Link>
-              )}
-            </div>
-          </div>
-        </div>
+              {/* Documents Section */}
+              <div className="bg-[#0d0d12] border border-white/10 rounded-[8px] overflow-hidden">
+                <div className="p-6 md:p-8 border-b border-white/10 flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-white">
+                    Knowledge Documents
+                  </h3>
+                  <label className="cursor-pointer bg-primary text-black px-5 py-2 rounded-[8px] text-xs font-bold flex items-center gap-2">
+                    <Plus size={16} />{" "}
+                    {isUploadingMemory ? "Uploading..." : "Add Document"}
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={handleMemoryUpload}
+                    />
+                  </label>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="text-[10px] text-gray-500 uppercase bg-black/20 font-bold tracking-widest">
+                      <tr>
+                        <th className="px-8 py-4">File Name</th>
+                        <th className="px-8 py-4">Status</th>
+                        <th className="px-8 py-4 text-right">Delete</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {vault?.files
+                        .filter((f: any) => f.avatarId === id || !f.avatarId)
+                        .map((file: any) => (
+                          <tr
+                            key={file._id}
+                            className="group hover:bg-white/[0.02]"
+                          >
+                            <td className="px-8 py-5">
+                              <div className="flex items-center gap-3">
+                                <FileText size={18} className="text-gray-400" />
+                                <span className="text-sm font-medium text-white">
+                                  {file.fileName}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-8 py-5 text-xs">
+                              {file.isIndexed ? (
+                                <span className="text-primary flex items-center gap-1">
+                                  <CheckCircle size={14} /> Learned
+                                </span>
+                              ) : (
+                                <span className="text-yellow-500 animate-pulse">
+                                  Reading...
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-8 py-5 text-right">
+                              <button
+                                onClick={() =>
+                                  deleteMemoryFile(file._id).then(
+                                    loadInitialData,
+                                  )
+                                }
+                                className="p-2 text-red-500/50 hover:text-red-500"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -435,18 +857,14 @@ const RequirementRow = ({
   count: string;
 }) => (
   <div className="space-y-2">
-    <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
-      <span className={met ? "text-white" : "text-gray-600"}>{label}</span>
-      <span
-        className={met ? "text-primary font-mono" : "text-gray-700 font-mono"}
-      >
-        {count}
-      </span>
+    <div className="flex justify-between items-center text-xs font-bold">
+      <span className={met ? "text-white" : "text-gray-500"}>{label}</span>
+      <span className={met ? "text-primary" : "text-gray-600"}>{count}</span>
     </div>
-    <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+    <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
       <motion.div
-        animate={{ width: met ? "100%" : "20%" }}
-        className={`h-full ${met ? "bg-primary" : "bg-red-500/20"}`}
+        animate={{ width: met ? "100%" : "15%" }}
+        className={`h-full ${met ? "bg-primary" : "bg-white/10"}`}
       />
     </div>
   </div>

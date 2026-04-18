@@ -41,7 +41,7 @@ export const sendMessageToAvatar = async (
   try {
     const response: any = await api.post("/api/v1/chat", { avatarId, message });
     // Assuming your controller returns { success: true, data: { reply, voiceId... } }
-    return response.data;
+    return response;
   } catch (error) {
     handleApiError(error, "Communication link failed");
     throw error;

@@ -6,32 +6,33 @@ export const useCheck = (
   setMessage: (message: string) => void,
 ) => {
   for (let [key, value] of Object.entries(obj)) {
-    if (key == emailKey) {
-      if (!value.trim()) {
-        setToster(true);
-        setMessage(`${key} required`);
-        return true;
-      }
+    // Basic requirement check for all fields
+    if (!value || !value.trim()) {
+      setToster(true);
+      setMessage(`${key} required`);
+      return true;
+    }
 
-      const regEx = /^[a-zA-Z][^@\s]*@[^@\s]+\.com$/;
+    if (key === emailKey) {
+      // Standard Email Regex: allows dots in name, multiple domains, etc.
+      const regEx = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
       if (!regEx.test(value.trim())) {
         setToster(true);
         setMessage("Invalid Email");
         return true;
       }
 
-      const checkAt = value.match(/@/g) ?? [];
-      const checkCom = value.match(/\.com/g) ?? [];
+      // Removed the checkAt and checkCom manual counts.
+      // The Regex above already ensures there is exactly one '@'
+      // and a valid domain structure.
+    }
 
-      if (checkAt.length > 1 || checkCom.length > 1) {
+    // You can add a specific check for password length here if needed
+    if (key === passwordKey) {
+      if (value.length < 6) {
         setToster(true);
-        setMessage("Invalid Email");
-        return true;
-      }
-    } else {
-      if (!value.trim()) {
-        setToster(true);
-        setMessage(`${key} required`);
+        setMessage("Password must be at least 6 characters");
         return true;
       }
     }

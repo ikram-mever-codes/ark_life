@@ -7,7 +7,12 @@ export interface IAvatar extends Document {
   name: string;
   description?: string;
   status: AvatarStatus;
-
+  mouthCoords?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
   /** The specific front-facing photo used by SadTalker for animation */
   heroImageUrl: string | null;
 
@@ -49,7 +54,14 @@ const AvatarSchema: Schema = new Schema(
     // SadTalker Paths
     heroImageUrl: { type: String, default: null },
     masterVideoUrl: { type: String, default: null },
-
+    mouthCoords: {
+      type: {
+        x: { type: Number },
+        y: { type: Number },
+        width: { type: Number },
+        height: { type: Number },
+      },
+    },
     photoUrls: { type: [String], default: [] },
     voiceSampleUrls: { type: [String], default: [] },
 
