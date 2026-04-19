@@ -35,11 +35,12 @@ import {
 import { toast } from "react-hot-toast";
 import Link from "next/link";
 import { detectMouthCoords } from "@/utils/mouthDetection";
+import { BASE_URL } from "@/utils/constants";
 
 export const getAssetUrl = (localPath: string) => {
   if (!localPath) return "";
   if (localPath.startsWith("http")) return localPath;
-  const baseUrl = "http://localhost:8000";
+  const baseUrl = BASE_URL;
   const relativePath = localPath.split("uploads")[1] || localPath;
   return `${baseUrl}/uploads${relativePath.replace(/\\/g, "/")}`;
 };
