@@ -21,6 +21,7 @@ import { toast } from "react-hot-toast";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import MouthOverlay from "@/components/MouthOverlay";
+import { BASE_URL } from "@/utils/constants";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ type AiState = "idle" | "thinking" | "buffering" | "vocalizing";
 const getAssetUrl = (localPath: string) => {
   if (!localPath) return "";
   if (localPath.startsWith("http")) return localPath;
-  const baseUrl = "http://localhost:8000";
+  const baseUrl = BASE_URL;
   const path = localPath.replace(/\\/g, "/");
   return `${baseUrl}/uploads/${path.split("uploads/")[1] || path}`;
 };
