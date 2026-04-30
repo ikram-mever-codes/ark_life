@@ -1,0 +1,283 @@
+# ArkLife Project — Complete Development Context
+
+A comprehensive summary of every decision, fix, and architectural choice made across this conversation. Useful for onboarding new contributors, resuming work later, or briefing future AI collaborators.
+
+## Project Overview
+
+**ArkLife** is an AI Digital Twin Platform that creates "Autonomous Identity Nodes" — high-fidelity virtual versions of a person that look, sound, and think like them. The product is wrapped in a cyberpunk "Neural OS" theme (v4.2) where every technical action is reframed: uploads are "DNA injections," training is "Neural Syncing," errors are "Handshake Failed."
+
+**The three pillars of identity synthesis:**
+1. **Appearance** — D-ID / HeyGen (image-to-video animation)
+2. **Voice** — ElevenLabs (voice cloning / "Vocal DNA")
+3. **Knowledge** — RAG with vector embeddings ("Memory Vault")
+
+**Tech stack:**
+- Backend: Node.js + Express + TypeScript + MongoDB
+- Frontend: Next.js + React + Framer Motion + Tailwind CSS
+- LLM: OpenAI GPT-4 Turbo
+- Styling: Dark glassmorphism, emerald/sky-blue neon accents, sharp 8-10px borders
+
+**Tier system:** Free (1 avatar), Pro (5), Business (20)
+
+## Chronological Journey of Decisions & Fixes
+
+### Phase 1: D-ID Workaround — The Master Loop Strategy
+
+**Problem:** No D-ID or HeyGen subscription available for the demo, but the architecture depended on them for face animation during chat.
+
+**Decision made:** Replace D-ID's dynamic video generation with a locally-generated "breathing" idle loop created via ffmpeg from the hero image. This preserves the existing Hybrid Dynamic Model where the frontend expected a video to play during chat — nothing downstream had to change.
+
+**Implementation:**
+- Created `utils/generateMasterLoop.ts` using ffmpeg's `zoompan` filter with a triangular zoom expression (1.00× → 1.04× → 1.00× over 6 seconds at 30fps, 720×720 yuv420p MP4)
+- Triangular zoom ensures frame 0 matches the final frame → seamless `<video loop>` playback
+- Output saved to `/uploads/avatars/{id}/master.mp4` on local server
+- Avatar schema gained `masterVideoUrl: String | null` field
+- `cloneVoice` controller triggers loop generation after successful ElevenLabs sync
+- `setHeroImage` regenerates the loop if hero changes after voice is cloned
+- Graceful degradation: if ffmpeg fails, voice still clones; chat falls back to still hero image
+
+**ChatController cleanup:**
+- Removed all D-ID API calls (the 25-attempt polling loop was adding ~50 seconds of blocking time per message)
+- Removed `DID_AUTH` constant and `axios` import
+- Removed public-URL guard on `heroImageUrl` (was only needed for D-ID)
+- Now returns `videoUrl: avatar.masterVideoUrl` — frontend loops this while ElevenLabs audio plays
+- Response time dropped from ~10-50s to ~2-4s (just GPT latency)
+
+**Frontend ChatRoom changes:**
+- Removed `currentVideoUrl` state (no per-message video swapping anymore)
+- Video `<video>` tag always points to `masterVideoUrl` with `loop` always true
+- Kept the `scale-105 saturate-100` transition during `vocalizing` state — critical visual trick that makes the static loop feel alive when voice kicks in
+
+### Phase 2: Lip Sync Without Real Models
+
+**Problem:** User wanted lip syncing but had no GPU or paid API access.
+
+**Decision made:** Go with "Tier 2" approach — audio-reactive mouth overlay positioned over the avatar's real mouth. Rejected true neural lip-sync (needs D-ID/GPU) and rejected pure visual effects (doesn't feel like lip sync).
+
+**Design choices made by me when user said "whatever is best":**
+- **Mouth positioning: face-api.js auto-detection**, one-time at hero image selection
+- **Mouth visual: semi-transparent dark oval** (reads as "shadow inside an open mouth" — avoids the uncanny valley of fake SVG mouth shapes)
+- **Audio driver: Web Audio API `AnalyserNode`** extracting RMS amplitude at ~60fps
+
+**Implementation pieces:**
+1. `frontend/src/utils/mouthDetection.ts` — face-api.js wrapper that detects the 20-point mouth landmark set, normalizes to 0-1 coordinates, falls back to lower-center heuristic if no face detected
+2. `frontend/src/components/MouthOverlay.tsx` — positioned absolutely via CSS percentages, splices an AnalyserNode into the audio graph, drives `scaleY` based on amplitude (0.15 closed → 1.0 fully open)
+3. Avatar schema gained `mouthCoords: { x, y, width, height }` field (all normalized 0-1)
+4. New backend endpoint `POST /:id/mouth-coords`
+5. Avatar Lab flows detection automatically:
+   - Pre-warms face-api.js models on mount (downloads ~6MB from CDN in background)
+   - After `setHeroImage` succeeds, runs `detectMouthCoords` in browser, POSTs result
+   - Shows calibration progress UI (pulsing overlay + Target icon when done)
+
+### Phase 3: The Mouth Coords Debugging Saga
+
+**Problem:** `mouthCoords` kept coming back null after save.
+
+**Root cause progression:**
+1. First suspicion: API function missing → turned out to be partially correct
+2. `setAvatarMouthCoords` was returning wrong shape — `response.data` gave back `{avatar: ...}` envelope instead of the Avatar itself
+3. `Avatar` TypeScript interface was missing `width` and `height` on `mouthCoords` — only had `x` and `y`
+4. **True root cause: Mongoose schema was missing the `mouthCoords` field entirely** → Mongoose silently strips unknown fields on save
+5. Also added `markModified("mouthCoords")` to the backend controller — Mongoose sometimes fails to detect nested object changes
+
+**Final fixes:**
+- Avatar Mongoose schema explicitly defines `mouthCoords` as a nested schema with `_id: false` to prevent subdocument _id generation
+- `setAvatarMouthCoords` unwraps `response.data.avatar` correctly
+- Avatar interface includes all four coord fields
+- Added heavy debug logging at every step so future failures surface in console
+- Added visible red error banner in Avatar Lab (no more silent calibration failures)
+- Added dedicated "Calibrate Mouth" button in sidebar when needed
+- Auto-calibration triggers after photo upload (not just hero selection)
+
+### Phase 4: Chat Room Redesign
+
+**Problem:** User wanted simpler mobile-responsive design with specific layout.
+
+**Delivered design:**
+- **Top bar**: Back arrow, avatar name with pulsing status dot, action buttons (Memory, Config, Menu on mobile, End session)
+- **Centered avatar stage**: 3:4 aspect ratio, subtle corner accents that light up when speaking, `scale-105 saturate-100` when vocalizing vs desaturated/dim when idle
+- **Typing animation area** directly above input: shows "Avatar is thinking..." with pulsing dots during GPT call, then streamed words synced to audio duration with blinking cursor
+- **Input bar**: rounded 12px, focus state lights border primary green, send button becomes spinner while processing
+- **Transcript sidebar**: 320px column on desktop; slide-over drawer on mobile triggered by Menu button with message count badge
+- **Message bubbles**: blue-tinted right-side for user, green-tinted left-side for avatar, auto-scrolls
+
+**Design choices I defended:**
+- Cut the system health panel, Neural Log terminal, and HUD top strip — they competed visually with the avatar
+- Kept Neural OS language ("Neural Link Active", "Processing...", "Credits Depleted") and primary green accents
+- Mobile sidebar as drawer (not side-by-side) because squeezing both on 375px wrecks avatar presence
+
+### Phase 5: Memory Vault Debugging — The OOM Saga
+
+**Problem:** Uploading documents caused `FATAL ERROR: JavaScript heap out of memory` crashes. A 62KB PDF was blowing 4GB of heap (65,000× amplification — clearly an algorithmic bug, not a tuning issue).
+
+**Fix progression (each fix revealed the next problem):**
+
+**Bug 1: Heap leak in `pdf-parse` v2**
+- Old library held entire PDF.js document + rasterized page caches + font subsets + canvas state
+- `destroy()` didn't release child references
+- **Fix:** Replace with `pdfjs-dist` page-by-page extraction with explicit `page.cleanup()` after each page
+
+**Bug 2: `require()` of ES Module error**
+- pdfjs-dist v4 ships only as `.mjs` (ESM)
+- `createRequire` couldn't load it from CommonJS context
+- **Fix:** Use `new Function("m", "return import(m)")` to create a real dynamic import that TypeScript won't transpile into require()
+
+**Bug 3: `Invalid workerSrc type`**
+- pdfjs-dist v4 rejected `GlobalWorkerOptions.workerSrc = false`
+- **Fix:** Use `disableWorker: true` + `useWorkerFetch: false` in the `getDocument` options instead
+
+### Phase 6: RAG Strategy Pivot
+
+**Problem:** Original embedding-based RAG kept breaking through multiple failure points (PDF extraction, OpenAI embeddings API, MongoDB vector storage). Too many moving parts for a demo.
+
+**User chose:** Keyword search workaround + keep old embedding code as dead code for rollback safety.
+
+**Implementation:**
+- New `services/keywordSearchService.ts` with TF-IDF scoring in pure JavaScript
+  - Stopword filtering
+  - Tokenizer strips punctuation, lowercases, drops words <2 chars
+  - Scoring: `Σ(termCountInChunk × log(totalChunks / chunksContainingTerm))`
+  - Scoped by userId + optional avatarId
+- `services/memoryVaultService.ts` rewritten to skip embeddings entirely — `storeChunksAsText` writes chunks directly to MongoDB in batches of 50
+- `ChatController` swapped `findTopChunks` → `findTopChunksByKeyword`
+- Old `embeddingService.ts` kept as dead code for easy rollback
+- No OpenAI embedding API calls, no vector indexes, no rate limits
+
+### Phase 7: The "Stuck in Reading" Debugging
+
+**Problem:** Documents uploaded successfully but status stayed "Reading..." forever — no errors, no completion logs.
+
+**Root cause:** `setImmediate` callback never executed. Async errors inside the executor vanished silently without triggering error handlers.
+
+**Fix:** Moved indexing **inline** inside the POST request handler. Response only returns after indexing completes or fails with a clear reason. Response body includes `indexResult: { ok, error }` field so frontend knows immediately without polling.
+
+**Added throughout the pipeline:**
+- Visual separator logs (`━━━`) around each indexing attempt
+- Log at every boundary: file received, extraction start, chars extracted, chunks stored
+- Response shape includes full vault state and indexResult
+
+### Phase 8: GPT Refusing to Use RAG Context
+
+**Problem:** RAG was working (chunks retrieved, scores logged, 3 chunks sent to GPT) but GPT responded "I can't access PDFs" when user asked about an uploaded invoice.
+
+**Three compounding causes:**
+1. **Weak system prompt** — "Use these memories when relevant" was a suggestion GPT ignored when confused
+2. **Query polluted with filename** — user's message contained `Commercial_Invoice_1ed62f76-e85d-4eca-a0b8-8503776d71d0.pdf`, which made keyword search match UUID fragments instead of invoice content
+3. **GPT's "I can't read files" reflex** — triggered by the filename in the user message
+
+**Fixes:**
+- **Stronger system prompt:** explicit block with `=== YOUR KNOWLEDGE ===` markers, instruction "You have already read and processed this content. Treat it as your own knowledge," and explicit "Do NOT say you cannot access files"
+- **Query cleaning:** strip file extensions, UUIDs, and long hex strings before keyword search
+- **Debug logging:** now prints first 150 chars of each retrieved chunk so you can see what GPT is actually reading
+- **max_tokens bumped** from 100 to 150 for RAG responses
+
+### Phase 9: Production Deployment Fix
+
+**Problem:** Master video URL was null in production (VPS at `vmd148720`) even though local worked.
+
+**Diagnosis from production logs:**
+```
+Master loop generation failed: ffmpeg spawn failed: spawn ffmpeg ENOENT
+```
+
+**Root cause:** ffmpeg not installed on production VPS. The `cloneVoice` try/catch was silently swallowing the failure and marking avatar as ready without a video.
+
+**Fix:**
+```bash
+sudo apt update && sudo apt install -y ffmpeg
+pm2 restart arklife-api
+```
+
+**Secondary issue noticed:** PM2 was also trying to load `dist/server.js` (nonexistent) at one point — needed `npm run build` or switch to ts-node runner.
+
+## Final Architecture State
+
+**Backend flow for chat (post all fixes):**
+1. User sends message → POST `/api/v1/chat`
+2. ChatController validates user credits + avatar readiness
+3. Saves user message to MongoDB
+4. Cleans query (strips filenames/UUIDs) → calls `findTopChunksByKeyword`
+5. Builds assertive system prompt with retrieved chunks in explicit knowledge markers
+6. Calls OpenAI GPT-4 Turbo with 150 max_tokens
+7. Returns `{ reply, videoUrl: avatar.masterVideoUrl, voiceId, remainingCredits }`
+8. Saves assistant message, decrements credits
+
+**Backend flow for memory upload:**
+1. User uploads PDF → POST `/api/v1/memory/add-memory`
+2. File saved to `/uploads/memory/{userId}/`
+3. **Inline indexing** runs synchronously (no setImmediate):
+   - pdfjs-dist extracts text page-by-page (with `disableWorker: true` and `page.cleanup()`)
+   - `chunkText` splits into 800-char chunks with 100-char overlap (infinite-loop guard)
+   - Chunks written to MongoDB as plain text (no embeddings)
+4. Response includes `indexResult: { ok, error }` so frontend knows immediately
+
+**Frontend flow for avatar creation:**
+1. Avatar Lab loads → face-api.js models pre-warm in background
+2. User uploads photos/voice samples → auto-save
+3. User sets hero image OR it auto-sets on first upload
+4. Browser runs `detectMouthCoords` on hero URL → POSTs normalized coords
+5. Backend stores `mouthCoords` on avatar document
+6. User clicks "Connect AI Voice & Video" → triggers `cloneVoice`:
+   - ElevenLabs clones voice
+   - ffmpeg generates master loop (requires ffmpeg installed on server)
+   - Avatar status flips to `ready`
+7. User clicks "Chat" → ChatRoom loads
+
+**Frontend flow during chat:**
+1. Master loop video plays on loop, desaturated + dimmed when idle
+2. User sends message → state: `thinking` (brain icon overlay, dots animation)
+3. GPT response arrives → ElevenLabs audio fetched → state: `vocalizing`
+4. Video transitions to saturated + scale-up + bright
+5. `AnalyserNode` splices into audio graph → reads RMS amplitude at 60fps
+6. `MouthOverlay` renders dark oval at detected mouth coords, scaling vertically with amplitude
+7. Words stream below avatar synced to audio duration with blinking cursor
+8. Transcript sidebar (or mobile drawer) shows full conversation history
+
+## Known Good Configuration
+
+**Backend dependencies:**
+- `pdfjs-dist` (v4+, used via dynamic import)
+- `mammoth` (DOCX extraction)
+- `form-data` (ElevenLabs uploads)
+- `cloudinary` (hero image CDN)
+- `openai` (GPT-4)
+- No longer using: `pdf-parse`, OpenAI embeddings API
+
+**Frontend dependencies:**
+- `face-api.js` (loaded from CDN: `https://cdn.jsdelivr.net/npm/@vladmandic/face-api@latest/model`)
+- `framer-motion`, `lucide-react`, `react-hot-toast`
+- Tailwind with `primary` color set to emerald green
+
+**Server requirements:**
+- ffmpeg installed (critical for master loop generation)
+- Node 18+
+- MongoDB with Avatar, MemoryVault, MemoryChunk, Message, User collections
+
+## Critical Gotchas Documented
+
+1. **ffmpeg must be on PATH** in any deployment environment — no graceful alternative
+2. **Mongoose strict mode** silently strips fields not in schema — always verify schema matches controller writes
+3. **`markModified()`** is required for nested object assignments in Mongoose
+4. **TypeScript transpiles `import()` to `require()`** when `module: "commonjs"` — use `new Function` wrapper to prevent this
+5. **pdfjs-dist v4** requires `disableWorker: true` in options, not `workerSrc = false`
+6. **`setImmediate` swallows errors silently** — inline handling is more reliable for demo code
+7. **Avatar `masterVideoUrl` is null** for avatars created before ffmpeg was installed → must recreate or add regen endpoint
+
+## Demo Readiness Status
+
+**Working:**
+- Avatar creation with photos + voice samples
+- ElevenLabs voice cloning
+- ffmpeg master loop generation (locally; requires ffmpeg on production)
+- Mouth detection + calibration
+- Chat with GPT-4 responses
+- ElevenLabs voice synthesis during chat
+- Audio-reactive mouth overlay during speech
+- Master loop video playback with breathing effect
+- Keyword-based RAG from uploaded documents
+- Memory Vault file management
+
+**Demo tips:**
+- Ask RAG questions using words that literally appear in the uploaded document (keyword search doesn't do synonyms)
+- Clone a fresh avatar after installing ffmpeg on production (old avatars have null masterVideoUrl)
+- Keep voice samples clean (ElevenLabs needs good audio input)
