@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -31,6 +31,14 @@ import {
   MessageSquare,
   Target,
   AlertTriangle,
+  Camera,
+  Video,
+  Square,
+  StopCircle,
+  Circle,
+  PenLine,
+  RotateCcw,
+  Check,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import Link from "next/link";
@@ -44,6 +52,11 @@ export const getAssetUrl = (localPath: string) => {
   const relativePath = localPath.split("uploads")[1] || localPath;
   return `${baseUrl}/uploads${relativePath.replace(/\\/g, "/")}`;
 };
+
+/* ─────────────────────────────────────────────────────────────────
+ * Capture mode types — for the live capture modal
+ * ─────────────────────────────────────────────────────────────── */
+type CaptureMode = null | "photo" | "video" | "audio";
 
 const AvatarLab = () => {
   const { id } = useParams();
@@ -65,6 +78,14 @@ const AvatarLab = () => {
   const [vault, setVault] = useState<VaultData | null>(null);
   const [isUploadingMemory, setIsUploadingMemory] = useState(false);
   const [neuralBio, setNeuralBio] = useState("");
+
+  /* ── NEW: capture state ──────────────────────────────────────── */
+  const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
+
+  /* ── NEW: written note state ─────────────────────────────────── */
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteBody, setNoteBody] = useState("");
+  const [isSavingNote, setIsSavingNote] = useState(false);
 
   const loadInitialData = useCallback(async () => {
     try {
@@ -260,6 +281,26 @@ const AvatarLab = () => {
   };
 
   /**
+   * NEW: Receive captured assets from the CaptureStudio modal.
+   * For photos (from camera snap OR video-frame extraction), we add to
+   * selectedPhotos and selectedVoices arrays — same exact queue used by
+   * file upload. Sync to backend happens on "Save Uploaded Files" click,
+   * which means zero changes to the existing upload pipeline.
+   */
+  const handleCapturedFile = (file: File, kind: "photo" | "voice") => {
+    if (kind === "photo") {
+      setSelectedPhotos((prev) => [...prev, file]);
+      setPhotoPreviews((prev) => [...prev, URL.createObjectURL(file)]);
+    } else {
+      setSelectedVoices((prev) => [...prev, file]);
+    }
+    toast.success(
+      kind === "photo" ? "Photo captured" : "Audio recording captured",
+    );
+    setCaptureMode(null);
+  };
+
+  /**
    * SYNC ASSETS — Upload photos/voice, then auto-calibrate if we now have a
    * hero image but no mouth calibration yet.
    *
@@ -383,6 +424,57 @@ const AvatarLab = () => {
     }
   };
 
+  /**
+   * NEW: Save a written note as a memory document.
+   *
+   * Strategy: convert the note text to a text File (Blob) and push it through
+   * the existing addMemory({ file }) flow. The backend already handles .txt
+   * files via the same pdfjs-dist / mammoth / chunkText pipeline (txt files
+   * are read as plain UTF-8). Zero backend changes needed.
+   */
+  const handleSaveNote = async () => {
+    const trimmedTitle = noteTitle.trim();
+    const trimmedBody = noteBody.trim();
+    if (!trimmedBody) {
+      toast.error("Note body is empty");
+      return;
+    }
+
+    setIsSavingNote(true);
+    const tid = toast.loading("Saving note...");
+
+    try {
+      // Sanitize title for filename use: replace whitespace/special chars
+      const safeTitle =
+        (trimmedTitle || `Note_${new Date().toISOString().slice(0, 10)}`)
+          .replace(/[^a-z0-9_-]+/gi, "_")
+          .slice(0, 60) + ".txt";
+
+      // Build a tidy text body with optional title header
+      const fullText = trimmedTitle
+        ? `${trimmedTitle}\n${"=".repeat(trimmedTitle.length)}\n\n${trimmedBody}`
+        : trimmedBody;
+
+      const blob = new Blob([fullText], { type: "text/plain" });
+      const noteFile = new File([blob], safeTitle, { type: "text/plain" });
+
+      await addMemory({ file: noteFile, avatarId: id as string });
+
+      // Refresh vault so the new note shows up immediately
+      const fresh = await getVault();
+      setVault(fresh);
+
+      setNoteTitle("");
+      setNoteBody("");
+      toast.success("Note saved to memory vault", { id: tid });
+    } catch (err: any) {
+      console.error("[handleSaveNote] Failed:", err);
+      toast.error(`Save failed: ${err?.message || "unknown"}`, { id: tid });
+    } finally {
+      setIsSavingNote(false);
+    }
+  };
+
   if (loading || !avatar)
     return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center">
@@ -473,11 +565,11 @@ const AvatarLab = () => {
               <div className="lg:col-span-8 space-y-8">
                 {/* Visuals Section */}
                 <section className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
-                  <div className="flex justify-between items-center mb-6">
+                  <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
                       Photo Library
                     </h3>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {/* Dedicated "Calibrate Mouth" button — always visible when needed */}
                       {needsCalibration && (
                         <button
@@ -497,6 +589,23 @@ const AvatarLab = () => {
                           )}
                         </button>
                       )}
+
+                      {/* NEW: Take Photo via camera */}
+                      <button
+                        onClick={() => setCaptureMode("photo")}
+                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-4 py-2 rounded-[6px] text-xs font-bold border border-white/10 transition-all"
+                      >
+                        <Camera size={14} /> Take Photo
+                      </button>
+
+                      {/* NEW: Record Video → extract frame */}
+                      <button
+                        onClick={() => setCaptureMode("video")}
+                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-4 py-2 rounded-[6px] text-xs font-bold border border-white/10 transition-all"
+                      >
+                        <Video size={14} /> Record Video
+                      </button>
+
                       <label className="cursor-pointer bg-white/5 hover:bg-white/10 px-4 py-2 rounded-[6px] text-xs font-bold border border-white/10 transition-all">
                         <input
                           type="file"
@@ -605,14 +714,28 @@ const AvatarLab = () => {
 
                 {/* Voice Section */}
                 <section className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-6">
-                    Voice Samples
-                  </h3>
+                  <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      Voice Samples
+                    </h3>
+                    {/* NEW: Record Audio directly */}
+                    <button
+                      onClick={() => setCaptureMode("audio")}
+                      className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-4 py-2 rounded-[6px] text-xs font-bold border border-white/10 transition-all"
+                    >
+                      <Mic size={14} /> Record Audio
+                    </button>
+                  </div>
+
                   <div className="space-y-4">
                     <label className="w-full py-12 border-2 border-dashed border-white/10 rounded-[8px] flex flex-col items-center justify-center cursor-pointer hover:bg-white/5 transition-all">
                       <Mic size={24} className="text-primary mb-2" />
                       <span className="text-sm font-bold text-gray-400">
                         Click to upload voice recordings
+                      </span>
+                      <span className="text-[10px] text-gray-600 mt-1">
+                        For best Italian voice cloning: upload 1–3 minutes of
+                        clean speech
                       </span>
                       <input
                         type="file"
@@ -625,14 +748,14 @@ const AvatarLab = () => {
                     {selectedVoices.map((f, i) => (
                       <div
                         key={i}
-                        className="p-4 bg-primary/5 border border-primary/20 rounded-[8px] text-xs flex justify-between"
+                        className="p-4 bg-primary/5 border border-primary/20 rounded-[8px] text-xs flex justify-between items-center"
                       >
-                        <span className="text-primary font-bold">
+                        <span className="text-primary font-bold truncate mr-3">
                           {f.name} (Ready to upload)
                         </span>
                         <X
                           size={16}
-                          className="cursor-pointer"
+                          className="cursor-pointer flex-shrink-0"
                           onClick={() =>
                             setSelectedVoices((v) =>
                               v.filter((_, idx) => idx !== i),
@@ -644,14 +767,23 @@ const AvatarLab = () => {
                     {avatar.voiceSampleUrls.map((url, i) => (
                       <div
                         key={i}
-                        className="p-4 bg-white/5 border border-white/10 rounded-[8px] flex justify-between items-center group"
+                        className="p-4 bg-white/5 border border-white/10 rounded-[8px] flex justify-between items-center group gap-3"
                       >
-                        <span className="text-xs">
-                          Recording_Sample_{i + 1}.wav
-                        </span>
+                        {/* NEW: inline audio player for previewing existing samples */}
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs block mb-2">
+                            Recording_Sample_{i + 1}
+                          </span>
+                          <audio
+                            controls
+                            src={getAssetUrl(url)}
+                            className="w-full h-8"
+                            style={{ maxWidth: "100%" }}
+                          />
+                        </div>
                         <Trash2
                           size={16}
-                          className="text-red-500 cursor-pointer"
+                          className="text-red-500 cursor-pointer flex-shrink-0"
                           onClick={(e) => handleRemoveAsset(e, url, "voice")}
                         />
                       </div>
@@ -689,12 +821,25 @@ const AvatarLab = () => {
                     />
                   </div>
 
+                  {/* NEW: Helpful hint about why "Connect AI Voice & Video" might be disabled */}
+                  {(avatar.photoUrls.length < 1 ||
+                    avatar.voiceSampleUrls.length < 1) && (
+                    <div className="mt-6 p-3 bg-sky-500/10 border border-sky-500/20 rounded-[6px] text-[11px] text-sky-300 leading-relaxed">
+                      <strong className="block mb-1 text-sky-200">
+                        Why is chat locked?
+                      </strong>
+                      You need at least 1 photo AND 1 voice sample saved before
+                      you can connect the AI. Use the buttons on the left to add
+                      them.
+                    </div>
+                  )}
+
                   {/* Prominent calibrate button in sidebar when needed */}
                   {needsCalibration && (
                     <button
                       onClick={() => calibrateMouth()}
                       disabled={isCalibrating}
-                      className="w-full mt-8 py-3 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 rounded-[8px] text-xs font-bold text-yellow-400 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+                      className="w-full mt-6 py-3 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 rounded-[8px] text-xs font-bold text-yellow-400 transition-all disabled:opacity-40 flex items-center justify-center gap-2"
                     >
                       {isCalibrating ? (
                         <>
@@ -768,6 +913,58 @@ const AvatarLab = () => {
                   className="w-full bg-black/40 border border-white/10 rounded-[8px] p-4 text-sm h-32 outline-none focus:border-primary/50 transition-all"
                   placeholder="Describe who this person is, how they speak, and their background..."
                 />
+              </div>
+
+              {/* NEW: Quick Note (written memory without file upload) */}
+              <div className="bg-[#0d0d12] border border-white/10 rounded-[8px] p-6 md:p-8">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <PenLine size={18} className="text-primary" />
+                    Quick Note
+                  </h3>
+                  <span className="text-[10px] text-gray-500 uppercase tracking-widest">
+                    Saved to Memory Vault
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+                  Write a memory, fact, or context note directly. It will be
+                  indexed and searchable in chat — no file upload needed.
+                </p>
+                <input
+                  type="text"
+                  value={noteTitle}
+                  onChange={(e) => setNoteTitle(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-[8px] p-3 text-sm mb-3 outline-none focus:border-primary/50 transition-all"
+                  placeholder="Note title (optional)"
+                  disabled={isSavingNote}
+                />
+                <textarea
+                  value={noteBody}
+                  onChange={(e) => setNoteBody(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-[8px] p-4 text-sm h-32 outline-none focus:border-primary/50 transition-all"
+                  placeholder="Write your note here..."
+                  disabled={isSavingNote}
+                />
+                <div className="flex justify-between items-center mt-3">
+                  <span className="text-[10px] text-gray-600">
+                    {noteBody.length} characters
+                  </span>
+                  <button
+                    onClick={handleSaveNote}
+                    disabled={isSavingNote || !noteBody.trim()}
+                    className="bg-primary text-black px-5 py-2 rounded-[8px] text-xs font-bold flex items-center gap-2 disabled:opacity-30 transition-all"
+                  >
+                    {isSavingNote ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" /> Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check size={14} /> Save Note
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Documents Section */}
@@ -844,6 +1041,17 @@ const AvatarLab = () => {
           )}
         </AnimatePresence>
       </div>
+
+      {/* NEW: Live capture modal — only mounted when active */}
+      <AnimatePresence>
+        {captureMode && (
+          <CaptureStudio
+            mode={captureMode}
+            onCancel={() => setCaptureMode(null)}
+            onCapture={handleCapturedFile}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -870,5 +1078,666 @@ const RequirementRow = ({
     </div>
   </div>
 );
+
+/* ═══════════════════════════════════════════════════════════════════
+ * CaptureStudio — modal for taking photos, recording video, recording audio
+ *
+ * Self-contained component. Uses MediaDevices.getUserMedia + MediaRecorder.
+ * Communicates back via onCapture(file, "photo" | "voice").
+ *
+ * Photo: snaps current video frame → JPEG File
+ * Video: records up to 15s → extracts middle frame as JPEG File ("photo" kind)
+ * Audio: records mic → WebM/Opus File ("voice" kind) — works for ElevenLabs
+ *
+ * Why video extracts a frame instead of saving the video: the avatar pipeline
+ * accepts photos only (uploadAvatarAssets photoUrls + heroImageUrl). Surfacing
+ * "Record Video" as a UX affordance lets users move/express naturally and pick
+ * the best frame as a still — more useful than a constrained still shot.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+const CaptureStudio: React.FC<{
+  mode: "photo" | "video" | "audio";
+  onCancel: () => void;
+  onCapture: (file: File, kind: "photo" | "voice") => void;
+}> = ({ mode, onCancel, onCapture }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordedVideoBlobRef = useRef<Blob | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animRef = useRef<number | null>(null);
+
+  const [ready, setReady] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
+  // For photo: holds dataURL preview before confirm
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  // For video: holds extracted frame preview before confirm
+  const [videoFramePreview, setVideoFramePreview] = useState<string | null>(
+    null,
+  );
+  // For audio: holds blob URL for playback before confirm
+  const [audioPreview, setAudioPreview] = useState<string | null>(null);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
+
+  const MAX_VIDEO_SEC = 15;
+  const MAX_AUDIO_SEC = 120;
+
+  /* ── Initialize media stream on mount ─────────────────────────── */
+  useEffect(() => {
+    let cancelled = false;
+
+    const setup = async () => {
+      try {
+        if (
+          typeof navigator === "undefined" ||
+          !navigator.mediaDevices?.getUserMedia
+        ) {
+          throw new Error(
+            "Your browser does not support camera/mic access. Try Chrome, Safari, or Edge.",
+          );
+        }
+
+        const constraints: MediaStreamConstraints =
+          mode === "audio"
+            ? { audio: true }
+            : {
+                video: {
+                  facingMode: "user",
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+                audio: mode === "video",
+              };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+
+        if (mode !== "audio" && videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+
+        // Audio meter (live level visualization while idle for audio mode)
+        if (mode === "audio") {
+          try {
+            const AudioCtx =
+              (window as any).AudioContext ||
+              (window as any).webkitAudioContext;
+            const ctx = new AudioCtx();
+            audioCtxRef.current = ctx;
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyserRef.current = analyser;
+
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            const tick = () => {
+              analyser.getByteTimeDomainData(data);
+              let sumSq = 0;
+              for (let i = 0; i < data.length; i++) {
+                const v = (data[i] - 128) / 128;
+                sumSq += v * v;
+              }
+              const rms = Math.sqrt(sumSq / data.length);
+              setAudioLevel(Math.min(1, rms * 3));
+              animRef.current = requestAnimationFrame(tick);
+            };
+            tick();
+          } catch (e) {
+            console.warn("[CaptureStudio] Audio meter setup failed:", e);
+          }
+        }
+
+        setReady(true);
+      } catch (err: any) {
+        console.error("[CaptureStudio] getUserMedia failed:", err);
+        const msg =
+          err?.name === "NotAllowedError"
+            ? "Permission denied. Allow camera/mic access in your browser settings."
+            : err?.name === "NotFoundError"
+              ? "No camera or microphone found on this device."
+              : err?.message || "Could not access your camera or microphone.";
+        setSetupError(msg);
+      }
+    };
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  /* ── Tick the elapsed counter while recording ─────────────────── */
+  useEffect(() => {
+    if (!isRecording) return;
+    const interval = setInterval(() => {
+      setElapsed((e) => {
+        const next = e + 1;
+        const limit = mode === "video" ? MAX_VIDEO_SEC : MAX_AUDIO_SEC;
+        if (next >= limit) {
+          stopRecording();
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRecording, mode]);
+
+  /* ── Clean up everything (streams, audio context, recorders) ───── */
+  const cleanup = () => {
+    if (animRef.current) {
+      cancelAnimationFrame(animRef.current);
+      animRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try {
+        recorderRef.current.stop();
+      } catch {}
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  };
+
+  /* ── PHOTO: snap current video frame as JPEG ──────────────────── */
+  const snapPhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) {
+      toast.error("Camera not ready yet");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    setPhotoPreview(dataUrl);
+  };
+
+  const confirmPhoto = () => {
+    if (!photoPreview) return;
+    const file = dataURLtoFile(
+      photoPreview,
+      `capture_${Date.now()}.jpg`,
+      "image/jpeg",
+    );
+    onCapture(file, "photo");
+  };
+
+  /* ── VIDEO: record, then extract middle frame ─────────────────── */
+  const startVideoRecording = () => {
+    if (!streamRef.current) return;
+    chunksRef.current = [];
+    const mimeOptions = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+      "video/mp4",
+    ];
+    let chosen = "";
+    for (const m of mimeOptions) {
+      if (MediaRecorder.isTypeSupported(m)) {
+        chosen = m;
+        break;
+      }
+    }
+    const rec = chosen
+      ? new MediaRecorder(streamRef.current, { mimeType: chosen })
+      : new MediaRecorder(streamRef.current);
+
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    rec.onstop = async () => {
+      const blob = new Blob(chunksRef.current, {
+        type: chosen || "video/webm",
+      });
+      recordedVideoBlobRef.current = blob;
+      // Extract middle frame
+      const frameDataUrl = await extractMiddleFrame(blob);
+      if (frameDataUrl) setVideoFramePreview(frameDataUrl);
+      else toast.error("Could not extract a frame from the video");
+    };
+
+    recorderRef.current = rec;
+    rec.start();
+    setElapsed(0);
+    setIsRecording(true);
+  };
+
+  const startAudioRecording = () => {
+    if (!streamRef.current) return;
+    chunksRef.current = [];
+    const mimeOptions = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/mp4",
+    ];
+    let chosen = "";
+    for (const m of mimeOptions) {
+      if (MediaRecorder.isTypeSupported(m)) {
+        chosen = m;
+        break;
+      }
+    }
+    const rec = chosen
+      ? new MediaRecorder(streamRef.current, { mimeType: chosen })
+      : new MediaRecorder(streamRef.current);
+
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, {
+        type: chosen || "audio/webm",
+      });
+      setRecordedAudioBlob(blob);
+      setAudioPreview(URL.createObjectURL(blob));
+    };
+
+    recorderRef.current = rec;
+    rec.start();
+    setElapsed(0);
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  /* ── Extract a single frame from a video Blob ─────────────────── */
+  const extractMiddleFrame = (blob: Blob): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const v = document.createElement("video");
+      v.src = url;
+      v.muted = true;
+      v.playsInline = true;
+      v.crossOrigin = "anonymous";
+
+      v.onloadedmetadata = () => {
+        // Seek to middle of video
+        const target =
+          isFinite(v.duration) && v.duration > 0 ? v.duration / 2 : 0.1;
+        v.currentTime = target;
+      };
+      v.onseeked = () => {
+        const c = document.createElement("canvas");
+        c.width = v.videoWidth || 1280;
+        c.height = v.videoHeight || 720;
+        const ctx = c.getContext("2d");
+        if (!ctx) {
+          URL.revokeObjectURL(url);
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const dataUrl = c.toDataURL("image/jpeg", 0.92);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl);
+      };
+      v.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+    });
+  };
+
+  const confirmVideoFrame = () => {
+    if (!videoFramePreview) return;
+    const file = dataURLtoFile(
+      videoFramePreview,
+      `capture_${Date.now()}.jpg`,
+      "image/jpeg",
+    );
+    onCapture(file, "photo");
+  };
+
+  const confirmAudio = () => {
+    if (!recordedAudioBlob) return;
+    const ext = recordedAudioBlob.type.includes("mp4")
+      ? "mp4"
+      : recordedAudioBlob.type.includes("ogg")
+        ? "ogg"
+        : "webm";
+    const file = new File(
+      [recordedAudioBlob],
+      `recording_${Date.now()}.${ext}`,
+      { type: recordedAudioBlob.type },
+    );
+    onCapture(file, "voice");
+  };
+
+  const resetPreview = () => {
+    setPhotoPreview(null);
+    setVideoFramePreview(null);
+    setAudioPreview(null);
+    setRecordedAudioBlob(null);
+    setElapsed(0);
+  };
+
+  /* ── Render ───────────────────────────────────────────────────── */
+  const title =
+    mode === "photo"
+      ? "Take Photo"
+      : mode === "video"
+        ? "Record Video"
+        : "Record Audio";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+      onClick={onCancel}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        className="bg-[#0d0d12] border border-white/10 rounded-[10px] max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-white/10">
+          <h3 className="text-base font-bold text-white flex items-center gap-2">
+            {mode === "photo" && <Camera size={18} className="text-primary" />}
+            {mode === "video" && <Video size={18} className="text-primary" />}
+            {mode === "audio" && <Mic size={18} className="text-primary" />}
+            {title}
+          </h3>
+          <button onClick={onCancel} className="text-gray-500 hover:text-white">
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-5 space-y-4">
+          {setupError ? (
+            <div className="bg-red-950/50 border border-red-700/50 rounded-[8px] p-4 flex items-start gap-3">
+              <AlertTriangle
+                size={20}
+                className="text-red-400 flex-shrink-0 mt-0.5"
+              />
+              <p className="text-sm text-red-200">{setupError}</p>
+            </div>
+          ) : !ready ? (
+            <div className="aspect-video flex items-center justify-center bg-black/40 rounded-[8px]">
+              <Loader2 className="animate-spin text-primary" size={32} />
+            </div>
+          ) : (
+            <>
+              {/* PHOTO MODE */}
+              {mode === "photo" && (
+                <>
+                  {!photoPreview ? (
+                    <>
+                      <div className="relative aspect-video bg-black rounded-[8px] overflow-hidden">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                          style={{ transform: "scaleX(-1)" }}
+                        />
+                      </div>
+                      <div className="flex justify-center gap-3">
+                        <button
+                          onClick={snapPhoto}
+                          className="flex items-center gap-2 bg-primary text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                        >
+                          <Camera size={16} /> Capture
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="aspect-video bg-black rounded-[8px] overflow-hidden">
+                        <img
+                          src={photoPreview}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex justify-center gap-3">
+                        <button
+                          onClick={resetPreview}
+                          className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-5 py-3 rounded-[8px] text-xs font-bold border border-white/10"
+                        >
+                          <RotateCcw size={14} /> Retake
+                        </button>
+                        <button
+                          onClick={confirmPhoto}
+                          className="flex items-center gap-2 bg-primary text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                        >
+                          <Check size={16} /> Use Photo
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* VIDEO MODE */}
+              {mode === "video" && (
+                <>
+                  {!videoFramePreview ? (
+                    <>
+                      <div className="relative aspect-video bg-black rounded-[8px] overflow-hidden">
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                          style={{ transform: "scaleX(-1)" }}
+                        />
+                        {isRecording && (
+                          <div className="absolute top-3 left-3 flex items-center gap-2 bg-red-600/90 text-white px-3 py-1 rounded-full text-xs font-bold">
+                            <Circle
+                              size={8}
+                              className="fill-white animate-pulse"
+                            />
+                            REC {elapsed}s / {MAX_VIDEO_SEC}s
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 text-center">
+                        Record up to {MAX_VIDEO_SEC}s. We'll extract the best
+                        middle frame as your photo.
+                      </p>
+                      <div className="flex justify-center gap-3">
+                        {!isRecording ? (
+                          <button
+                            onClick={startVideoRecording}
+                            className="flex items-center gap-2 bg-red-600 text-white px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                          >
+                            <Circle size={14} className="fill-white" /> Start
+                            Recording
+                          </button>
+                        ) : (
+                          <button
+                            onClick={stopRecording}
+                            className="flex items-center gap-2 bg-white text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                          >
+                            <Square size={14} className="fill-black" /> Stop
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="aspect-video bg-black rounded-[8px] overflow-hidden">
+                        <img
+                          src={videoFramePreview}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 text-center">
+                        Extracted frame from the middle of your recording.
+                      </p>
+                      <div className="flex justify-center gap-3">
+                        <button
+                          onClick={resetPreview}
+                          className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-5 py-3 rounded-[8px] text-xs font-bold border border-white/10"
+                        >
+                          <RotateCcw size={14} /> Retake
+                        </button>
+                        <button
+                          onClick={confirmVideoFrame}
+                          className="flex items-center gap-2 bg-primary text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                        >
+                          <Check size={16} /> Use Frame
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* AUDIO MODE */}
+              {mode === "audio" && (
+                <>
+                  {!audioPreview ? (
+                    <>
+                      <div className="aspect-video bg-black rounded-[8px] flex flex-col items-center justify-center gap-6 p-8">
+                        {/* Animated mic indicator with live audio level */}
+                        <div className="relative">
+                          <div
+                            className="absolute inset-0 rounded-full bg-primary/30 transition-all"
+                            style={{
+                              transform: `scale(${1 + audioLevel * 1.5})`,
+                              opacity: 0.4 + audioLevel * 0.6,
+                            }}
+                          />
+                          <div
+                            className={`relative w-24 h-24 rounded-full flex items-center justify-center ${isRecording ? "bg-red-600" : "bg-primary/20 border-2 border-primary/40"}`}
+                          >
+                            <Mic
+                              size={40}
+                              className={
+                                isRecording ? "text-white" : "text-primary"
+                              }
+                            />
+                          </div>
+                        </div>
+                        {isRecording && (
+                          <div className="text-center">
+                            <p className="text-2xl font-bold text-white tabular-nums">
+                              {Math.floor(elapsed / 60)}:
+                              {(elapsed % 60).toString().padStart(2, "0")}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Max {MAX_AUDIO_SEC / 60}:00
+                            </p>
+                          </div>
+                        )}
+                        {!isRecording && (
+                          <p className="text-xs text-gray-500 text-center max-w-sm">
+                            Speak naturally for 1–3 minutes. For best Italian
+                            voice cloning, read a paragraph aloud in Italian.
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex justify-center gap-3">
+                        {!isRecording ? (
+                          <button
+                            onClick={startAudioRecording}
+                            className="flex items-center gap-2 bg-red-600 text-white px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                          >
+                            <Circle size={14} className="fill-white" /> Start
+                            Recording
+                          </button>
+                        ) : (
+                          <button
+                            onClick={stopRecording}
+                            className="flex items-center gap-2 bg-white text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                          >
+                            <Square size={14} className="fill-black" /> Stop
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="aspect-video bg-black rounded-[8px] flex flex-col items-center justify-center gap-4 p-8">
+                        <div className="w-24 h-24 rounded-full bg-primary/20 border-2 border-primary/40 flex items-center justify-center">
+                          <Mic size={40} className="text-primary" />
+                        </div>
+                        <audio
+                          controls
+                          src={audioPreview}
+                          className="w-full max-w-md"
+                        />
+                        <p className="text-xs text-gray-500">
+                          Duration: {elapsed}s
+                        </p>
+                      </div>
+                      <div className="flex justify-center gap-3">
+                        <button
+                          onClick={resetPreview}
+                          className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-5 py-3 rounded-[8px] text-xs font-bold border border-white/10"
+                        >
+                          <RotateCcw size={14} /> Re-record
+                        </button>
+                        <button
+                          onClick={confirmAudio}
+                          className="flex items-center gap-2 bg-primary text-black px-6 py-3 rounded-[8px] font-bold text-sm hover:scale-105 transition-all"
+                        >
+                          <Check size={16} /> Use Recording
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+};
+
+/* ── Utility: convert dataURL → File ──────────────────────────────── */
+const dataURLtoFile = (
+  dataUrl: string,
+  filename: string,
+  mime: string,
+): File => {
+  const arr = dataUrl.split(",");
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8 = new Uint8Array(n);
+  while (n--) u8[n] = bstr.charCodeAt(n);
+  return new File([u8], filename, { type: mime });
+};
 
 export default AvatarLab;
