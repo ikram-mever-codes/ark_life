@@ -29,7 +29,7 @@ app.use(
 
 app.use(
   cors({
-    origin: ["https://ark-life.runtyme.io", "http://localhost:3000"],
+    origin: ["https://app.arklifeproject.com", "http://localhost:3000"],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
