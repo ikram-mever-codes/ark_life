@@ -72,10 +72,6 @@ export class AvatarController {
         .json({ success: false, message: "Initialization handshake failed" });
     }
   };
-<<<<<<< HEAD
-=======
-
->>>>>>> 1ecee7093ee284046f55cab65ead699e03d89b5c
   /**
    * LIST: Retrieve all nodes for the authenticated user.
    */
