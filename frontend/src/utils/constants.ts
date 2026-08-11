@@ -1,6 +1,6 @@
 // export const BASE_URL = "http://localhost:8000/api/v1";
-// export const BASE_URL = "http://localhost:8000";
-export const BASE_URL = "https://api.arklifeproject.com";
+export const BASE_URL = "http://localhost:8000";
+// export const BASE_URL = "https://api.arklifeproject.com";
 
 export const successStyles = {
   style: {

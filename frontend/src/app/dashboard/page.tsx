@@ -8,12 +8,9 @@ import {
   Activity,
   Zap,
   Play,
-  Cpu,
-  Globe,
   Fingerprint,
-  Layers,
   ShieldCheck,
-  TrendingUp,
+  ChevronRight,
   X,
 } from "lucide-react";
 import { getSystemOverviewSubmit } from "@/api/auth";
@@ -33,9 +30,7 @@ const Dashboard: React.FC = () => {
         console.error("Dashboard failed to synchronize with Neural Core");
       }
     };
-
     fetchStats();
-
     const hasSeenManual = localStorage.getItem("ark_manual_seen");
     if (!hasSeenManual) setShowManual(true);
   }, []);
@@ -49,63 +44,58 @@ const Dashboard: React.FC = () => {
     {
       title: "Neural Core",
       desc: "This is your Avatar's brain status. Keep it synced for better responses.",
-      target: "training",
     },
     {
       title: "Memory Injection",
       desc: "Upload files here to give your Twin a long-term memory.",
-      target: "vault",
     },
     {
       title: "Neural Chat",
       desc: "Start a live visual session with your digital Twin.",
-      target: "chat",
     },
   ];
 
-  // Logic to handle secure redirection to Chat
-  const handleChatRedirection = () => {
-    router.push("/avatars");
-  };
+  const handleChatRedirection = () => router.push("/avatars");
+
+  const progress = data?.trainingProgress || 0;
+  const stats = data?.stats || [{}, {}, {}];
 
   return (
-    <div className="min-h-screen bg-[#050505] text-slate-200 p-4 lg:p-10 font-sans relative overflow-hidden">
+    <div className="min-h-screen bg-background text-foreground pb-10">
       <AnimatePresence>
         {showManual && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+            className="fixed inset-0 z-[100] bg-overlay backdrop-blur-sm flex items-end sm:items-center justify-center"
           >
             <motion.div
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-[#0d0d12] border border-primary/30 p-8 rounded-3xl max-w-md w-full relative shadow-[0_0_50px_rgba(var(--primary-rgb),0.2)]"
+              initial={{ y: 40, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="bg-surface-elevated border border-primary/30 p-6 sm:p-8 rounded-t-3xl sm:rounded-3xl max-w-md w-full relative shadow-2xl"
             >
               <button
                 onClick={() => setShowManual(false)}
-                className="absolute top-4 right-4 text-gray-500 hover:text-white"
+                className="absolute top-4 right-4 text-foreground-subtle hover:text-foreground"
               >
                 <X size={20} />
               </button>
-              <div className="mb-6">
-                <span className="text-[10px] text-primary font-black uppercase tracking-widest">
-                  Manual Step {currentStep + 1}/3
-                </span>
-                <h3 className="text-2xl font-bold text-white mt-1">
-                  {manualSteps[currentStep].title}
-                </h3>
-                <p className="text-gray-400 mt-2 leading-relaxed">
-                  {manualSteps[currentStep].desc}
-                </p>
-              </div>
-              <div className="flex justify-between items-center">
+              <span className="text-[10px] text-primary font-black uppercase tracking-widest">
+                Step {currentStep + 1} of 3
+              </span>
+              <h3 className="text-xl sm:text-2xl font-bold mt-1">
+                {manualSteps[currentStep].title}
+              </h3>
+              <p className="text-foreground-muted mt-2 text-sm leading-relaxed">
+                {manualSteps[currentStep].desc}
+              </p>
+              <div className="flex justify-between items-center mt-6">
                 <div className="flex gap-1">
                   {manualSteps.map((_, i) => (
                     <div
                       key={i}
-                      className={`h-1 w-4 rounded-full ${i === currentStep ? "bg-primary" : "bg-white/10"}`}
+                      className={`h-1 rounded-full transition-all ${i === currentStep ? "w-6 bg-primary" : "w-3 bg-border"}`}
                     />
                   ))}
                 </div>
@@ -113,11 +103,11 @@ const Dashboard: React.FC = () => {
                   onClick={() =>
                     currentStep === 2
                       ? completeManual()
-                      : setCurrentStep((prev) => prev + 1)
+                      : setCurrentStep((p) => p + 1)
                   }
-                  className="px-6 py-2 bg-primary text-black font-bold rounded-xl text-sm"
+                  className="px-5 py-2.5 bg-primary text-background font-bold rounded-xl text-sm active:scale-95 transition-transform"
                 >
-                  {currentStep === 2 ? "Initialize System" : "Next Protocol"}
+                  {currentStep === 2 ? "Start" : "Next"}
                 </button>
               </div>
             </motion.div>
@@ -125,105 +115,124 @@ const Dashboard: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <header className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center mb-12 gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Fingerprint className="text-primary w-5 h-5" />
-            <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/80 italic">
-              ArkLife OS Protocol
-            </span>
-          </div>
-          <h1 className="text-4xl font-extrabold tracking-tighter text-white">
-            Neural Command Center
-          </h1>
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-4 pt-6 sm:px-8 sm:pt-8 lg:px-10">
+        <div className="flex items-center gap-2">
+          <Fingerprint className="text-primary w-4 h-4" />
+          <span className="text-[10px] font-black uppercase tracking-[0.25em] text-primary/80">
+            ArkLife OS
+          </span>
         </div>
-      </header>
+        <div className="flex items-center gap-1.5 text-[10px] font-bold text-foreground-muted">
+          <span className="w-1.5 h-1.5 rounded-full bg-success" />
+          System Online
+        </div>
+      </div>
 
-      <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* STATS FROM API */}
-        {(data?.stats || [{}, {}, {}]).map((stat: any, i: number) => (
+      <div className="px-4 sm:px-8 lg:px-10 mt-3 mb-6">
+        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight">
+          Neural Command Center
+        </h1>
+      </div>
+
+      {/* Hero status card — progress ring + primary CTA, single focal point */}
+      <div className="px-4 sm:px-8 lg:px-10">
+        <div className="bg-surface border border-border rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row items-center gap-6 sm:gap-8">
           <div
-            key={i}
-            className="lg:col-span-4 bg-[#0a0a0c] border border-white/5 p-6 rounded-2xl flex items-center justify-between"
+            className="relative w-28 h-28 sm:w-32 sm:h-32 shrink-0 rounded-full grid place-items-center"
+            style={{
+              background: `conic-gradient(var(--arklife-primary) ${progress * 3.6}deg, var(--border-color) 0deg)`,
+            }}
           >
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-1 font-bold">
-                {stat.label || "Loading..."}
-              </p>
-              <p className="text-2xl font-black font-mono">
-                {stat.value || "---"}
-              </p>
+            <div className="w-[calc(100%-10px)] h-[calc(100%-10px)] rounded-full bg-surface grid place-items-center">
+              <div className="text-center">
+                <p className="text-2xl font-black">{Math.round(progress)}%</p>
+                <p className="text-[9px] uppercase tracking-widest text-foreground-subtle font-bold">
+                  Synced
+                </p>
+              </div>
             </div>
-            <Zap className="text-primary opacity-20" size={24} />
           </div>
-        ))}
 
-        <div className="lg:col-span-8 space-y-6">
-          <section className="bg-[#0d0d12] border border-white/10 rounded-3xl p-8">
-            <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-8">
-              <Activity className="text-primary w-5 h-5" /> Core Synthesis
-              Status
-            </h3>
-            <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${data?.trainingProgress || 0}%` }}
-                className="h-full bg-primary"
-              />
+          <div className="flex-1 text-center sm:text-left">
+            <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-1">
+              Core Synthesis Status
+            </p>
+            <p className="text-foreground-muted text-sm mb-4 max-w-sm">
+              Your Digital Twin's neural core, live and improving with every
+              memory you add.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={handleChatRedirection}
+                className="flex items-center justify-center gap-2 bg-primary text-background font-bold text-sm px-6 py-3 rounded-xl hover:brightness-110 active:scale-95 transition-all"
+              >
+                <Play size={16} fill="currentColor" /> Neural Chat
+              </button>
+              <button
+                onClick={() => router.push("/memory")}
+                className="flex items-center justify-center gap-2 bg-surface-elevated border border-border font-bold text-sm px-6 py-3 rounded-xl hover:border-primary/40 transition-colors"
+              >
+                <Database size={16} className="text-primary" /> Memory Vault
+              </button>
             </div>
-          </section>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* UPDATED NEURAL CHAT BUTTON */}
-            <button
-              onClick={handleChatRedirection}
-              className="relative p-8 rounded-3xl bg-primary text-black transition-all hover:scale-[1.02] active:scale-95 text-left"
-            >
-              <h4 className="text-2xl font-black tracking-tighter mb-2">
-                Neural Chat
-              </h4>
-              <p className="text-sm opacity-80">Link with your Digital Twin</p>
-              <Play className="mt-4" size={24} fill="currentColor" />
-              {/* Optional: Visual hint if locked */}
-              {data?.trainingProgress < 100 && (
-                <div className="absolute top-4 right-4 bg-black/20 p-1 rounded-md">
-                  <ShieldCheck size={14} />
-                </div>
-              )}
-            </button>
-
-            <button
-              onClick={() => router.push("/memory")}
-              className="relative p-8 rounded-3xl bg-[#0d0d12] border border-white/10 hover:border-primary/50 transition-all text-left"
-            >
-              <h4 className="text-2xl font-black tracking-tighter mb-2 text-white">
-                Memory Injection
-              </h4>
-              <p className="text-sm text-gray-500">Expand semantic knowledge</p>
-              <Database className="mt-4 text-primary" size={24} />
-            </button>
           </div>
         </div>
+      </div>
 
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-[#0d0d12] border border-white/10 rounded-3xl p-6">
-            <h4 className="text-sm font-bold uppercase tracking-widest text-primary mb-4">
+      {/* Stat strip — horizontal scroll on mobile, grid on desktop */}
+      <div className="mt-6 sm:mt-8">
+        <div className="flex gap-4 overflow-x-auto snap-x snap-mandatory px-4 sm:px-8 lg:px-10 pb-2 sm:grid sm:grid-cols-3 sm:overflow-visible">
+          {stats.map((stat: any, i: number) => (
+            <div
+              key={i}
+              className="snap-start shrink-0 w-40 sm:w-auto bg-surface border border-border p-5 rounded-2xl flex items-center justify-between"
+            >
+              <div>
+                <p className="text-[9px] uppercase tracking-widest text-foreground-subtle mb-1 font-bold">
+                  {stat.label || "Loading..."}
+                </p>
+                <p className="text-xl font-black font-mono">
+                  {stat.value || "---"}
+                </p>
+              </div>
+              <Zap className="text-primary opacity-30 shrink-0" size={20} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Secondary row — vault capacity, quick links */}
+      <div className="px-4 sm:px-8 lg:px-10 mt-6 sm:mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+        <div className="bg-surface border border-border rounded-2xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-xs font-bold uppercase tracking-widest text-primary">
               Vault Capacity
             </h4>
-            <div className="space-y-4">
-              <div className="flex justify-between text-xs font-mono">
-                <span>Usage</span>
-                <span>{Math.round(data?.vaultUsage || 0)}%</span>
-              </div>
-              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-500"
-                  style={{ width: `${data?.vaultUsage || 0}%` }}
-                />
-              </div>
-            </div>
+            <span className="text-xs font-mono text-foreground-muted">
+              {Math.round(data?.vaultUsage || 0)}%
+            </span>
+          </div>
+          <div className="h-2 w-full bg-border/40 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-info transition-all"
+              style={{ width: `${data?.vaultUsage || 0}%` }}
+            />
           </div>
         </div>
+
+        <button
+          onClick={() => router.push("/avatars")}
+          className="bg-surface border border-border rounded-2xl p-6 flex items-center justify-between hover:border-primary/40 transition-colors text-left"
+        >
+          <div>
+            <h4 className="text-xs font-bold uppercase tracking-widest text-foreground-muted mb-1">
+              Manage
+            </h4>
+            <p className="font-bold text-sm">All Digital Twins</p>
+          </div>
+          <ChevronRight className="text-primary" size={20} />
+        </button>
       </div>
     </div>
   );

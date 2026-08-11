@@ -1,21 +1,59 @@
 @import "tailwindcss";
 
 :root {
+  /* Surfaces */
   --background: #05070a;
+  --surface: #0a0f19;
+  --surface-elevated: #10161f;
+  --overlay: rgba(5, 7, 10, 0.85);
+
+  /* Text */
   --foreground: #ffffff;
-  --arklife-primary: #00f2ff;
-  --arklife-accent: #39ff14;
+  --foreground-muted: #9aa5b1;
+  --foreground-subtle: #5c6672;
+
+  /* Brand */
+  --arklife-primary: #2dd4ff; /* calmer cyan — buttons, links, focus */
+  --arklife-primary-hover: #5ce1ff;
+  --arklife-accent: #39ff14; /* reserved: glow, highlights, live/active states */
+  --arklife-glow: #00f2ff; /* reserved: hero/ambient effects only */
+
+  /* Status */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #2dd4ff;
+
+  /* Borders / rings */
   --border-color: rgba(255, 255, 255, 0.1);
+  --border-color-strong: rgba(255, 255, 255, 0.2);
+  --ring: var(--arklife-primary);
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-primary: var(--arklife-primary);
-  --color-accent: var(--arklife-accent);
-  --color-border: var(--border-color);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-overlay: var(--overlay);
 
-  /* Sharper Professional Radii */
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+
+  --color-primary: var(--arklife-primary);
+  --color-primary-hover: var(--arklife-primary-hover);
+  --color-accent: var(--arklife-accent);
+  --color-glow: var(--arklife-glow);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+
+  --color-border: var(--border-color);
+  --color-border-strong: var(--border-color-strong);
+  --color-ring: var(--ring);
+
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 8px;
@@ -27,13 +65,24 @@ body {
   font-family: var(--font-geist-sans);
 }
 
-/* Professional UI Panel */
 .ui-panel {
-  background: rgba(10, 15, 25, 0.8);
+  background: var(--surface);
   border: 1px solid var(--border-color);
   backdrop-filter: blur(8px);
 }
 
+.ui-panel-elevated {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-color-strong);
+}
+
 button {
   cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

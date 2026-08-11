@@ -400,6 +400,7 @@ const ChatRoom: React.FC = () => {
       if (!reply) throw new Error("No response");
 
       try {
+        // const audioBlob = await testAvatarSpeech(avatar.voiceId!, reply);
         const audioBlob = await testAvatarSpeech(avatar.voiceId!, reply);
         const arrayBuffer = await audioBlob.arrayBuffer();
 

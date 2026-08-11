@@ -71,10 +71,9 @@ const AvatarsPage = () => {
   if (loading) return <Loading />;
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white p-6 lg:p-12 selection:bg-primary selection:text-black">
-      <div className="max-w-7xl mx-auto space-y-10">
-        {/* Header Section */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-white/5 pb-10">
+    <div className="min-h-screen bg-background text-foreground p-4 sm:p-6 lg:p-12 selection:bg-primary selection:text-background">
+      <div className="max-w-7xl mx-auto space-y-8 sm:space-y-10">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 border-b border-border pb-6 sm:pb-10">
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <div className="w-8 h-[2px] bg-primary" />
@@ -82,11 +81,11 @@ const AvatarsPage = () => {
                 Neural Directory
               </span>
             </div>
-            <h1 className="text-5xl font-black tracking-tighter italic uppercase leading-none">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight uppercase leading-none text-foreground">
               Digital{" "}
               <span
                 className="text-transparent"
-                style={{ WebkitTextStroke: "1px white" }}
+                style={{ WebkitTextStroke: "1px var(--foreground)" }}
               >
                 Twins
               </span>
@@ -96,15 +95,14 @@ const AvatarsPage = () => {
           <div className="flex items-center gap-4">
             <button
               onClick={() => setShowModal(true)}
-              className="bg-primary text-black px-6 py-3 rounded-sm font-black text-[11px] uppercase tracking-widest flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(var(--primary-rgb),0.2)]"
+              className="w-full sm:w-auto justify-center bg-primary text-background px-6 py-3 rounded-lg font-black text-xs uppercase tracking-widest flex items-center gap-2 hover:brightness-110 active:scale-95 transition-all"
             >
               <Plus size={16} strokeWidth={3} /> New Avatar
             </button>
           </div>
         </header>
 
-        {/* Dashboard Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
           <StatCard
             icon={<Users size={18} />}
             label="Total Nodes"
@@ -122,15 +120,14 @@ const AvatarsPage = () => {
           />
         </div>
 
-        {/* Grid of Avatars */}
         {avatars.length === 0 ? (
-          <div className="py-20 text-center border border-dashed border-white/5 rounded-3xl">
-            <p className="text-white/20 uppercase tracking-[0.4em] text-[10px] font-bold">
+          <div className="py-16 sm:py-20 text-center border border-dashed border-border rounded-2xl sm:rounded-3xl">
+            <p className="text-foreground-subtle uppercase tracking-[0.4em] text-[10px] font-bold">
               No Neural Nodes Detected
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
             {avatars.map((avatar) => (
               <AvatarCard
                 key={avatar._id}
@@ -142,13 +139,12 @@ const AvatarsPage = () => {
         )}
       </div>
 
-      {/* Creation Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
-          <div className="bg-[#0a0a0a] border border-primary/30 w-full max-w-lg p-8 rounded-sm shadow-[0_0_50px_rgba(0,0,0,1)] relative">
+        <div className="fixed inset-0 bg-overlay backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-surface-elevated border border-primary/30 w-full max-w-lg p-6 sm:p-8 rounded-xl shadow-2xl relative max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setShowModal(false)}
-              className="absolute top-4 right-4 text-white/20 hover:text-white"
+              className="absolute top-4 right-4 text-foreground-subtle hover:text-foreground transition-colors"
             >
               <X size={20} />
             </button>
@@ -157,20 +153,20 @@ const AvatarsPage = () => {
               <span className="text-[10px] font-black text-primary uppercase tracking-widest">
                 Initialization Sequence
               </span>
-              <h2 className="text-3xl font-black italic uppercase tracking-tighter mt-1">
+              <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tight mt-1 text-foreground">
                 New Identity
               </h2>
             </div>
 
             <form onSubmit={handleCreate} className="space-y-6">
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest">
+                <label className="text-[9px] font-bold text-foreground-subtle uppercase tracking-widest">
                   Identity Designation
                 </label>
                 <input
                   autoFocus
                   required
-                  className="w-full bg-white/5 border border-white/10 rounded-sm p-3 outline-none focus:border-primary text-white font-mono text-sm transition-all"
+                  className="w-full bg-background border border-border rounded-md p-3 outline-none focus:border-primary text-foreground font-mono text-sm transition-colors"
                   placeholder="Ex: PROJECT_AETHER_01"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -178,11 +174,11 @@ const AvatarsPage = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest">
+                <label className="text-[9px] font-bold text-foreground-subtle uppercase tracking-widest">
                   Neural Parameters (Optional)
                 </label>
                 <textarea
-                  className="w-full bg-white/5 border border-white/10 rounded-sm p-3 h-28 outline-none focus:border-primary text-white text-sm transition-all resize-none"
+                  className="w-full bg-background border border-border rounded-md p-3 h-28 outline-none focus:border-primary text-foreground text-sm transition-colors resize-none"
                   placeholder="Describe the primary function of this twin..."
                   value={form.description}
                   onChange={(e) =>
@@ -191,18 +187,18 @@ const AvatarsPage = () => {
                 />
               </div>
 
-              <div className="pt-4 flex gap-4">
+              <div className="pt-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="flex-1 px-6 py-3 border border-white/10 text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-all"
+                  className="flex-1 px-6 py-3 rounded-md border border-border text-foreground-muted text-[10px] font-black uppercase tracking-widest hover:bg-surface transition-colors"
                 >
                   Abort
                 </button>
                 <button
                   type="submit"
                   disabled={isCreating}
-                  className="flex-1 px-6 py-3 bg-primary text-black text-[10px] font-black uppercase tracking-widest hover:brightness-110 disabled:opacity-50 transition-all"
+                  className="flex-1 px-6 py-3 rounded-md bg-primary text-background text-[10px] font-black uppercase tracking-widest hover:brightness-110 disabled:opacity-50 transition-all"
                 >
                   {isCreating ? "Initializing..." : "Confirm Sync"}
                 </button>
@@ -227,8 +223,8 @@ const AvatarCard = ({
   const [isPlaying, setIsPlaying] = useState(false);
 
   const statusStyles = {
-    draft: "text-gray-500",
-    training: "text-yellow-500",
+    draft: "text-foreground-subtle",
+    training: "text-warning",
     ready: "text-primary",
   };
 
@@ -263,19 +259,17 @@ const AvatarCard = ({
   };
 
   return (
-    <div className="group relative bg-[#0d0d0d] border border-white/5 rounded-3xl overflow-hidden hover:border-primary/30 transition-all duration-500 shadow-2xl">
-      {/* Top Banner / Delete Action */}
-      <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="group relative bg-surface border border-border rounded-2xl sm:rounded-3xl overflow-hidden hover:border-primary/30 transition-colors duration-300 shadow-lg">
+      <div className="absolute top-4 right-4 z-20 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleTermination}
-          className="p-2 bg-black/40 backdrop-blur-md text-white/40 hover:text-red-500 rounded-full border border-white/5 transition-all"
+          className="p-2 bg-background/70 backdrop-blur-md text-foreground-subtle hover:text-error rounded-full border border-border transition-colors"
         >
           <X size={14} />
         </button>
       </div>
 
-      {/* Profile Visual Section */}
-      <div className="relative aspect-[4/5] w-full bg-white/5 overflow-hidden">
+      <div className="relative aspect-[4/5] w-full bg-surface-elevated overflow-hidden">
         {avatar.heroImageUrl ? (
           <>
             <img
@@ -287,7 +281,7 @@ const AvatarCard = ({
               <button
                 onClick={handleTestSpeech}
                 disabled={isPlaying}
-                className="absolute bottom-4 left-4 p-3 bg-primary/20 backdrop-blur-xl border border-primary/30 rounded-full text-primary hover:bg-primary hover:text-black transition-all"
+                className="absolute bottom-4 left-4 p-3 bg-primary/20 backdrop-blur-xl border border-primary/30 rounded-full text-primary hover:bg-primary hover:text-background transition-colors"
               >
                 {isPlaying ? (
                   <Loader2 size={18} className="animate-spin" />
@@ -302,22 +296,21 @@ const AvatarCard = ({
             <Zap
               className={
                 avatar.status === "training"
-                  ? "animate-pulse text-yellow-500"
-                  : "text-white/10"
+                  ? "animate-pulse text-warning"
+                  : "text-foreground-subtle/40"
               }
               size={48}
               strokeWidth={1}
             />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-foreground-subtle">
               {avatar.status === "training" ? "Syncing DNA..." : "Core Empty"}
             </span>
           </div>
         )}
 
-        {/* Status Badge Overlay */}
         <div className="absolute top-4 left-4">
           <div
-            className={`flex items-center gap-2 px-3 py-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-full text-[8px] font-black uppercase tracking-widest ${statusStyles[avatar.status as keyof typeof statusStyles]}`}
+            className={`flex items-center gap-2 px-3 py-1 bg-background/70 backdrop-blur-md border border-border rounded-full text-[8px] font-black uppercase tracking-widest ${statusStyles[avatar.status as keyof typeof statusStyles]}`}
           >
             <div
               className={`w-1 h-1 rounded-full bg-current ${avatar.status === "training" ? "animate-ping" : ""}`}
@@ -327,24 +320,21 @@ const AvatarCard = ({
         </div>
       </div>
 
-      {/* Content Section */}
-      <div className="p-6 space-y-6">
+      <div className="p-5 sm:p-6 space-y-4 sm:space-y-6">
         <div className="space-y-1">
-          <h3 className="font-black text-lg tracking-tighter uppercase italic truncate">
+          <h3 className="font-black text-base sm:text-lg tracking-tight uppercase truncate text-foreground">
             {avatar.name}
           </h3>
-          <p className="text-white/40 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2">
-            <ImageIcon size={12} className="text-white/20" />{" "}
-            {avatar.photoUrls?.length || 0} Frames ·{" "}
-            <Mic size={12} className="text-white/20" />{" "}
-            {avatar.voiceSampleUrls?.length || 0} Samples
+          <p className="text-foreground-subtle text-[10px] uppercase font-bold tracking-widest flex items-center gap-2">
+            <ImageIcon size={12} /> {avatar.photoUrls?.length || 0} Frames ·{" "}
+            <Mic size={12} /> {avatar.voiceSampleUrls?.length || 0} Samples
           </p>
         </div>
 
         <div className="flex gap-2">
           <Link
             href={`/avatars/${avatar._id}`}
-            className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-all group/btn"
+            className="flex-1 flex items-center justify-center gap-2 bg-surface-elevated border border-border py-2.5 sm:py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:border-primary/40 transition-colors group/btn"
           >
             Config{" "}
             <Settings2
@@ -356,7 +346,7 @@ const AvatarCard = ({
           {avatar.status === "ready" && (
             <Link
               href={`/avatars/${avatar._id}/chat`}
-              className="flex-1 flex items-center justify-center gap-2 bg-primary text-black py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-primary/10"
+              className="flex-1 flex items-center justify-center gap-2 bg-primary text-background py-2.5 sm:py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all"
             >
               Chat <MessageSquare size={14} />
             </Link>
@@ -368,15 +358,17 @@ const AvatarCard = ({
 };
 
 const StatCard = ({ icon, label, value }: any) => (
-  <div className="bg-white/[0.02] border border-white/5 p-6 rounded-3xl flex items-center gap-5 group hover:border-primary/20 transition-all duration-500">
-    <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-primary group-hover:bg-primary/10 group-hover:scale-110 transition-all">
+  <div className="bg-surface border border-border p-5 sm:p-6 rounded-2xl flex items-center gap-4 sm:gap-5 group hover:border-primary/20 transition-colors duration-300">
+    <div className="w-12 h-12 rounded-2xl bg-surface-elevated flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
       {icon}
     </div>
     <div>
-      <p className="text-[10px] font-black uppercase text-white/30 tracking-widest">
+      <p className="text-[10px] font-black uppercase text-foreground-subtle tracking-widest">
         {label}
       </p>
-      <p className="text-2xl font-black italic leading-none mt-1">{value}</p>
+      <p className="text-xl sm:text-2xl font-black leading-none mt-1 text-foreground">
+        {value}
+      </p>
     </div>
   </div>
 );

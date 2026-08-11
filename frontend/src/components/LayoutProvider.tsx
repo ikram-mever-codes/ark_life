@@ -24,28 +24,28 @@ const LayoutProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <Provider store={store}>
-      {/* React Hot Toast */}
       <Toaster
         position="top-right"
         toastOptions={{
           duration: 4000,
           style: {
-            background: "#fff",
-            color: "#363636",
-            boxShadow: "0 3px 10px rgba(0, 0, 0, 0.1)",
-            borderRadius: "8px",
+            background: "var(--surface-elevated)",
+            color: "var(--foreground)",
+            border: "1px solid var(--border-color)",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+            borderRadius: "var(--radius-md)",
             padding: "12px 16px",
           },
           success: {
             iconTheme: {
-              primary: "#10b981",
-              secondary: "#fff",
+              primary: "var(--success)",
+              secondary: "var(--surface-elevated)",
             },
           },
           error: {
             iconTheme: {
-              primary: "#ef4444",
-              secondary: "#fff",
+              primary: "var(--error)",
+              secondary: "var(--surface-elevated)",
             },
           },
         }}

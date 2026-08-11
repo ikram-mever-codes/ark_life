@@ -438,37 +438,56 @@ export class AvatarController {
   /**
    * TEST SPEECH: Validate vocal signature with custom text.
    */
-  testSpeech = async (req: AuthRequest, res: Response) => {
-    const { voiceId, text } = req.body;
-    const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
-      .replace(/[`'"]/g, "")
-      .trim();
+  // testSpeech = async (req: AuthRequest, res: Response) => {
+  //   const { voiceId, text } = req.body;
+  //   const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
+  //     .replace(/[`'"]/g, "")
+  //     .trim();
 
+  //   try {
+  //     const response = await axios.post(
+  //       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+  //       {
+  //         text: text || "Neural link active.",
+  //         model_id: "eleven_monolingual_v1",
+  //       },
+  //       {
+  //         headers: {
+  //           "xi-api-key": cleanApiKey,
+  //           "Content-Type": "application/json",
+  //           Accept: "audio/mpeg",
+  //         },
+  //         responseType: "arraybuffer",
+  //       },
+  //     );
+  //     res.set("Content-Type", "audio/mpeg");
+  //     return res.send(response.data);
+  //   } catch (e: any) {
+  //     return res
+  //       .status(500)
+  //       .json({ success: false, message: "Vocal frequency failure" });
+  //   }
+  // };
+  testSpeech = async (req: AuthRequest, res: Response) => {
     try {
-      const response = await axios.post(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        {
-          text: text || "Neural link active.",
-          model_id: "eleven_monolingual_v1",
-        },
-        {
-          headers: {
-            "xi-api-key": cleanApiKey,
-            "Content-Type": "application/json",
-            Accept: "audio/mpeg",
-          },
-          responseType: "arraybuffer",
-        },
-      );
+      // Path to your local test audio file (adjust the path if 2.mp3 is stored elsewhere)
+      const mockAudioPath = path.join(__dirname, "../uploads/2.mp3");
+
       res.set("Content-Type", "audio/mpeg");
-      return res.send(response.data);
+      return res.sendFile(mockAudioPath, (err) => {
+        if (err) {
+          console.error("Failed to send mock audio file:", err);
+          return res
+            .status(500)
+            .json({ success: false, message: "Mock audio file not found" });
+        }
+      });
     } catch (e: any) {
       return res
         .status(500)
         .json({ success: false, message: "Vocal frequency failure" });
     }
   };
-
   /**
    * CLEAR ALL VOICES: Management utility to free up ElevenLabs slots.
    */
