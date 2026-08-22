@@ -18,6 +18,15 @@ import {
   VolumeX,
   PanelLeft,
   PanelRight,
+  Activity,
+  Heart,
+  Moon,
+  Droplet,
+  Ruler,
+  Weight,
+  MapPin,
+  Wind,
+  Footprints,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { getAvatarById, testAvatarSpeech, Avatar } from "@/api/avatars";
@@ -615,12 +624,66 @@ const AvatarChatPage = () => {
           scrollbar-width: thin;
           scrollbar-color: var(--border-color) transparent;
         }
+
+        .heartbeat-icon {
+          animation: heartbeatPulse 1.15s ease-in-out infinite;
+          transform-origin: center;
+        }
+        @keyframes heartbeatPulse {
+          0%,
+          100% {
+            transform: scale(1);
+          }
+          15% {
+            transform: scale(1.25);
+          }
+          30% {
+            transform: scale(1);
+          }
+          45% {
+            transform: scale(1.15);
+          }
+          60% {
+            transform: scale(1);
+          }
+        }
+        .ecg-line {
+          stroke-dasharray: 260;
+          stroke-dashoffset: 260;
+          animation: ecgDraw 2.4s linear infinite;
+        }
+        @keyframes ecgDraw {
+          0% {
+            stroke-dashoffset: 260;
+            opacity: 0.3;
+          }
+          50% {
+            stroke-dashoffset: 0;
+            opacity: 1;
+          }
+          100% {
+            stroke-dashoffset: -260;
+            opacity: 0.3;
+          }
+        }
+        .ring-gauge-pulse {
+          animation: ringPulse 2.6s ease-in-out infinite;
+        }
+        @keyframes ringPulse {
+          0%,
+          100% {
+            opacity: 0.35;
+          }
+          50% {
+            opacity: 0.9;
+          }
+        }
       `}</style>
     </div>
   );
 };
 
-/* ── Left panel — avatar identity + settings link, no chat content ──── */
+/* ── Left panel — avatar identity + health overview + settings ──────── */
 const LeftPanelContent = ({
   avatar,
   stateLabel,
@@ -640,8 +703,8 @@ const LeftPanelContent = ({
       </Link>
     </div>
 
-    <div className="p-3 flex flex-col items-center text-center border-b border-border shrink-0">
-      <div className="w-20 h-20 rounded-full overflow-hidden bg-surface-elevated border border-border shrink-0 mb-2.5">
+    <div className="p-3 flex items-center gap-3 border-b border-border shrink-0">
+      <div className="relative w-14 h-14 rounded-full overflow-hidden bg-surface-elevated border border-border shrink-0">
         {avatar.heroImageUrl && (
           <img
             src={getAssetUrl(avatar.heroImageUrl)}
@@ -649,29 +712,204 @@ const LeftPanelContent = ({
             alt={avatar.name}
           />
         )}
+        <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-background border-2 border-background flex items-center justify-center">
+          <span
+            className={`w-2 h-2 rounded-full ${stateColor.includes("primary") ? "bg-primary animate-pulse" : stateColor.includes("warning") ? "bg-warning animate-pulse" : "bg-foreground-subtle"}`}
+          />
+        </span>
       </div>
-      <p className="text-sm font-bold truncate w-full">{avatar.name}</p>
-      <p className={`hud-label mt-0.5 ${stateColor}`}>{stateLabel}</p>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold truncate">{avatar.name}</p>
+        <p className={`hud-label mt-0.5 ${stateColor}`}>{stateLabel}</p>
+      </div>
     </div>
 
-    <div className="p-3 space-y-1.5 flex-1">
-      <InfoRow label="Photos" value={avatar.photoUrls?.length ?? 0} />
-      <InfoRow
-        label="Voice Samples"
-        value={avatar.voiceSampleUrls?.length ?? 0}
-      />
-      <InfoRow label="Status" value={avatar.status} />
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <HealthOverview />
     </div>
 
-    <div className="p-3 border-t border-border shrink-0">
+    <div className="p-3 border-t border-border shrink-0 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3 text-[10px] font-bold text-foreground-subtle">
+        <span>{avatar.photoUrls?.length ?? 0} photos</span>
+        <span>{avatar.voiceSampleUrls?.length ?? 0} voice</span>
+        <span className="capitalize">{avatar.status}</span>
+      </div>
       <Link
         href={`/avatars/${avatar._id}`}
-        className="w-full flex items-center justify-center gap-2 bg-surface-elevated border border-border hover:border-primary/40 text-foreground-muted hover:text-primary px-3 py-2.5 rounded-lg text-xs font-bold transition-colors"
+        className="p-2 rounded-lg border border-border hover:border-primary/40 text-foreground-muted hover:text-primary transition-colors shrink-0"
+        title="Edit Twin"
       >
-        <Settings2 size={14} /> Edit Twin
+        <Settings2 size={14} />
       </Link>
     </div>
   </>
+);
+
+/* ── Health Overview — the sidebar's dominant section, sample data ──── */
+const HealthOverview = () => (
+  <div className="p-3.5">
+    <div className="flex items-center justify-between mb-3.5">
+      <p className="hud-label text-primary/80 flex items-center gap-1.5 text-xs">
+        <Activity size={13} /> Vitals Overview
+      </p>
+      <span className="flex items-center gap-1 text-[9px] font-bold text-warning uppercase tracking-wide bg-warning/10 border border-warning/25 px-2 py-0.5 rounded-full">
+        <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+        Demo Data
+      </span>
+    </div>
+
+    {/* Heart rate — hero metric, animated ECG line */}
+    <div className="bg-surface-elevated border border-border rounded-xl p-4 mb-3 relative overflow-hidden">
+      <div className="flex items-center justify-between mb-2">
+        <span className="flex items-center gap-1.5 hud-label text-foreground-muted">
+          <Heart size={13} className="text-error heartbeat-icon" /> Heart Rate
+        </span>
+        <span className="hud-metric text-2xl text-foreground leading-none">
+          72{" "}
+          <span className="text-[11px] text-foreground-subtle font-normal">
+            bpm
+          </span>
+        </span>
+      </div>
+      <svg
+        viewBox="0 0 200 44"
+        className="w-full h-10 ecg-svg"
+        preserveAspectRatio="none"
+      >
+        <polyline
+          points="0,22 30,22 40,8 50,36 60,22 90,22 100,4 110,40 120,22 200,22"
+          fill="none"
+          stroke="var(--arklife-primary)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="ecg-line"
+        />
+      </svg>
+      <p className="text-[10px] text-foreground-subtle mt-1">
+        Resting — normal range
+      </p>
+    </div>
+
+    {/* Sleep + Hydration — twin ring gauges with sample fills */}
+    <div className="grid grid-cols-2 gap-3 mb-3">
+      <div className="bg-surface-elevated border border-border rounded-xl p-3.5 flex flex-col items-center">
+        <RingGauge
+          icon={<Moon size={15} className="text-info" />}
+          colorVar="var(--info)"
+          percent={0.82}
+        />
+        <span className="hud-metric text-lg text-foreground mt-2">7.4h</span>
+        <span className="hud-label text-foreground-subtle">Sleep</span>
+        <span className="text-[9px] text-info mt-0.5 font-bold">
+          Good quality
+        </span>
+      </div>
+      <div className="bg-surface-elevated border border-border rounded-xl p-3.5 flex flex-col items-center">
+        <RingGauge
+          icon={<Droplet size={15} className="text-primary" />}
+          colorVar="var(--arklife-primary)"
+          percent={0.64}
+        />
+        <span className="hud-metric text-lg text-foreground mt-2">1.6L</span>
+        <span className="hud-label text-foreground-subtle">Hydration</span>
+        <span className="text-[9px] text-warning mt-0.5 font-bold">
+          Below goal
+        </span>
+      </div>
+    </div>
+
+    {/* SpO2 + Steps — secondary metrics row */}
+    <div className="grid grid-cols-2 gap-3 mb-3">
+      <div className="bg-surface-elevated border border-border rounded-xl p-3">
+        <span className="hud-label text-foreground-muted flex items-center gap-1.5 mb-1">
+          <Wind size={12} className="text-primary" /> SpO2
+        </span>
+        <p className="hud-metric text-lg text-foreground">
+          98<span className="text-xs text-foreground-subtle">%</span>
+        </p>
+      </div>
+      <div className="bg-surface-elevated border border-border rounded-xl p-3">
+        <span className="hud-label text-foreground-muted flex items-center gap-1.5 mb-1">
+          <Footprints size={12} className="text-primary" /> Steps
+        </span>
+        <p className="hud-metric text-lg text-foreground">6,214</p>
+      </div>
+    </div>
+
+    {/* Bio — height / weight / location */}
+    <div className="bg-surface-elevated border border-border rounded-xl p-3.5 space-y-2.5">
+      <p className="hud-label text-foreground-subtle mb-0.5">Bio</p>
+      <BioRow icon={<Ruler size={13} />} label="Height" value="178 cm" />
+      <BioRow icon={<Weight size={13} />} label="Weight" value="74 kg" />
+      <BioRow icon={<MapPin size={13} />} label="Location" value="Milan, IT" />
+    </div>
+
+    <p className="hud-label text-foreground-subtle mt-3 text-center leading-relaxed px-1">
+      Sample data — connect a wearable for live vitals
+    </p>
+  </div>
+);
+
+/* Radial progress ring — accepts a real percent for sample fills */
+const RingGauge = ({
+  icon,
+  colorVar,
+  percent = 0,
+}: {
+  icon: React.ReactNode;
+  colorVar: string;
+  percent?: number;
+}) => {
+  const radius = 19;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - percent);
+  return (
+    <div className="relative w-12 h-12 flex items-center justify-center">
+      <svg viewBox="0 0 48 48" className="w-12 h-12 -rotate-90">
+        <circle
+          cx="24"
+          cy="24"
+          r={radius}
+          fill="none"
+          stroke="var(--border-color)"
+          strokeWidth="3.5"
+        />
+        <circle
+          cx="24"
+          cy="24"
+          r={radius}
+          fill="none"
+          stroke={colorVar}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          className="ring-gauge-pulse"
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center">
+        {icon}
+      </span>
+    </div>
+  );
+};
+
+const BioRow = ({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) => (
+  <div className="flex items-center justify-between">
+    <span className="flex items-center gap-1.5 hud-label text-foreground-muted">
+      {icon} {label}
+    </span>
+    <span className="text-xs font-medium text-foreground">{value}</span>
+  </div>
 );
 
 const InfoRow = ({
