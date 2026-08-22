@@ -27,16 +27,26 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const field = file.fieldname;
-    // Default extensions based on asset type
+
+    const extFromMime: Record<string, string> = {
+      "audio/webm": ".webm",
+      "audio/ogg": ".ogg",
+      "audio/mp4": ".m4a",
+      "audio/mpeg": ".mp3",
+      "audio/wav": ".wav",
+      "audio/x-wav": ".wav",
+      "video/webm": ".webm",
+    };
+
     const ext =
       path.extname(file.originalname || "") ||
-      (field === "voiceSample" ? ".wav" : ".jpg");
+      extFromMime[file.mimetype] ||
+      (field === "voiceSample" ? ".webm" : ".jpg");
+
     const base = path.basename(
       file.originalname || "file",
       path.extname(file.originalname || "file"),
     );
-
-    // Clean filename for OS compatibility
     const safeBase = base.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
     cb(null, `${field}_${safeBase}_${Date.now()}${ext}`);
   },
@@ -48,18 +58,14 @@ function fileFilter(
   cb: multer.FileFilterCallback,
 ) {
   const isImage = file.mimetype.startsWith("image/");
-  const isAudio = [
-    "audio/mpeg",
-    "audio/wav",
-    "audio/wave",
-    "audio/x-wav",
-    "audio/mp3",
-  ].includes(file.mimetype);
+  const isAudio =
+    file.mimetype.startsWith("audio/") || // covers webm, ogg, mp4, mpeg, wav, x-wav, etc.
+    file.mimetype === "video/webm"; // some browsers report recorded audio-only blobs as video/webm
 
   if (!isImage && !isAudio) {
     return cb(
       new Error(
-        "Invalid file type. Only images and audio (MP3/WAV) are accepted.",
+        "Invalid file type. Only images and audio recordings are accepted.",
       ) as any,
     );
   }

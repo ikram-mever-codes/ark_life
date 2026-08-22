@@ -19,9 +19,15 @@ router.post("/:id/mouth-coords", avatarController.setMouthCoords);
 router.post(
   "/:id/upload",
   avatarUpload.fields([
-    { name: "photo", maxCount: 21 },
+    { name: "photo", maxCount: 20 },
     { name: "voiceSample", maxCount: 10 },
   ]),
+  (err: any, req: any, res: any, next: any) => {
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    next();
+  },
   avatarController.upload,
 );
 

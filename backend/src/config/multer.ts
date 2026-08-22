@@ -10,7 +10,8 @@ const ALLOWED_MIMES: Record<string, string> = {
   "text/plain": "txt",
   "text/markdown": "md",
   "application/pdf": "pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    "docx",
   "application/json": "json",
   "audio/mpeg": "mp3",
   "audio/wav": "wav",
@@ -18,15 +19,7 @@ const ALLOWED_MIMES: Record<string, string> = {
   "audio/x-wav": "wav",
 };
 
-const ALLOWED_EXT = new Set([
-  "txt",
-  "md",
-  "pdf",
-  "docx",
-  "json",
-  "mp3",
-  "wav",
-]);
+const ALLOWED_EXT = new Set(["txt", "md", "pdf", "docx", "json", "mp3", "wav"]);
 
 export function getMemoryUploadDir(userId: string): string {
   const dir = path.join(UPLOAD_BASE, userId);
@@ -48,9 +41,15 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const ext =
       ALLOWED_MIMES[file.mimetype] ||
-      path.extname(file.originalname || "").slice(1).toLowerCase() ||
+      path
+        .extname(file.originalname || "")
+        .slice(1)
+        .toLowerCase() ||
       "bin";
-    const base = path.basename(file.originalname || "file", path.extname(file.originalname || "file"));
+    const base = path.basename(
+      file.originalname || "file",
+      path.extname(file.originalname || "file"),
+    );
     const safe = base.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
     cb(null, `${safe}_${Date.now()}.${ext}`);
   },
@@ -63,7 +62,10 @@ function fileFilter(
 ) {
   const ext =
     ALLOWED_MIMES[file.mimetype] ||
-    path.extname(file.originalname || "").slice(1).toLowerCase();
+    path
+      .extname(file.originalname || "")
+      .slice(1)
+      .toLowerCase();
   if (!ext || !ALLOWED_EXT.has(ext)) {
     return cb(
       new Error(
