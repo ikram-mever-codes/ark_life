@@ -44,10 +44,15 @@ const buildPromptInstructions = (
   avatarDescription: string | undefined,
   memoryContext: string,
   userMessage: string,
+  neuralBio?: string,
 ): string => {
-  const persona = avatarDescription
-    ? `You are ${avatarName}. Persona: ${avatarDescription}.`
-    : `You are ${avatarName}.`;
+  const persona = [
+    `You are ${avatarName}.`,
+    avatarDescription ? `Persona: ${avatarDescription}.` : "",
+    neuralBio ? `Background & personality: ${neuralBio}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   if (!memoryContext) {
     return `${persona}\n\nUser Question: ${userMessage}\n\nRespond in 1-2 short sentences, staying in character.`;
@@ -75,11 +80,11 @@ export class ChatController {
 
     try {
       const user = await User.findById(userId);
-      if (!user || user.credits <= 0) {
-        return res
-          .status(403)
-          .json({ success: false, message: "Insufficient credits." });
-      }
+      // if (!user || user.credits <= 0) {
+      //   return res
+      //     .status(403)
+      //     .json({ success: false, message: "Insufficient credits." });
+      // }
 
       const avatar = await Avatar.findOne({ _id: avatarId, userId });
       if (!avatar || !avatar.heroImageUrl || !avatar.voiceId) {
@@ -119,6 +124,7 @@ export class ChatController {
         avatar.description,
         memoryContext,
         message,
+        avatar.description,
       );
 
       // 4. Call Interactions API using gemini-3.6-flash

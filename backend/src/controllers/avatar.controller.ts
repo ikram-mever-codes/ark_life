@@ -468,21 +468,46 @@ export class AvatarController {
   //       .json({ success: false, message: "Vocal frequency failure" });
   //   }
   // };
+  /**
+   * TEST SPEECH: Validate vocal signature with custom text.
+   */
   testSpeech = async (req: AuthRequest, res: Response) => {
-    try {
-      // Path to your local test audio file (adjust the path if 2.mp3 is stored elsewhere)
-      const mockAudioPath = path.join(__dirname, "../uploads/2.mp3");
+    const { voiceId, text } = req.body;
 
+    if (!voiceId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing voiceId" });
+    }
+
+    const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
+      .replace(/[`'"]/g, "")
+      .trim();
+
+    try {
+      const response = await axios.post(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        {
+          text: text || "Neural link active.",
+        },
+        {
+          headers: {
+            "xi-api-key": cleanApiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          responseType: "arraybuffer",
+        },
+      );
       res.set("Content-Type", "audio/mpeg");
-      return res.sendFile(mockAudioPath, (err) => {
-        if (err) {
-          console.error("Failed to send mock audio file:", err);
-          return res
-            .status(500)
-            .json({ success: false, message: "Mock audio file not found" });
-        }
-      });
+      return res.send(response.data);
     } catch (e: any) {
+      console.error(
+        "Test Speech Error:",
+        e.response?.data
+          ? Buffer.from(e.response.data).toString("utf-8")
+          : e.message,
+      );
       return res
         .status(500)
         .json({ success: false, message: "Vocal frequency failure" });

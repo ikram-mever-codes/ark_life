@@ -1,651 +1,737 @@
 "use client";
-import React, { useState, useEffect, useRef, useCallback } from "react";
+
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  Brain,
-  ChevronLeft,
-  Loader2,
-  Send,
-  Menu,
-  X,
-  Database,
-  Settings,
-  Power,
-  AlertCircle,
-  MessageSquare,
-  Sparkles,
-} from "lucide-react";
-import { sendMessageToAvatar, getChatHistory } from "@/api/chat";
-import { getAvatarById, testAvatarSpeech, Avatar } from "@/api/avatars";
-import { toast } from "react-hot-toast";
 import Link from "next/link";
-import { AnimatePresence, motion } from "framer-motion";
-import MouthOverlay from "@/components/MouthOverlay";
-import { BASE_URL } from "@/utils/constants";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ChevronLeft,
+  Settings2,
+  Send,
+  Mic,
+  MicOff,
+  Loader2,
+  MessageSquare,
+  AlertTriangle,
+  X,
+  Volume2,
+  VolumeX,
+  PanelLeft,
+  PanelRight,
+} from "lucide-react";
+import { toast } from "react-hot-toast";
+import { getAvatarById, testAvatarSpeech, Avatar } from "@/api/avatars";
+import { getAssetUrl } from "../page";
+import { getChatHistory, sendMessageToAvatar, ChatMessage } from "@/api/chat";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+type EngineState = "idle" | "speaking" | "listening";
 
-interface Message {
-  id: string;
-  role: "user" | "avatar";
-  text: string;
-}
-
-type AiState = "idle" | "thinking" | "buffering" | "vocalizing";
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const getAssetUrl = (localPath: string) => {
-  if (!localPath) return "";
-  if (localPath.startsWith("http")) return localPath;
-  const baseUrl = BASE_URL;
-  const path = localPath.replace(/\\/g, "/");
-  return `${baseUrl}/uploads/${path.split("uploads/")[1] || path}`;
-};
-
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-/**
- * Action button used in the top bar. Kept visually consistent across
- * desktop and mobile — size stays thumb-friendly (44px target).
- */
-const ActionButton: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  onClick?: () => void;
-  href?: string;
-  danger?: boolean;
-}> = ({ icon, label, onClick, href, danger }) => {
-  const className = `flex items-center gap-2 px-3 py-2 rounded-[8px] border transition-all text-xs font-bold uppercase tracking-wider
-    ${
-      danger
-        ? "border-red-500/20 text-red-400 hover:bg-red-500/10 hover:border-red-500/40"
-        : "border-white/10 text-white/60 hover:text-white hover:bg-white/5 hover:border-white/20"
-    }`;
-
-  const content = (
-    <>
-      {icon}
-      <span className="hidden sm:inline">{label}</span>
-    </>
-  );
-
-  if (href) {
-    return (
-      <Link href={href} className={className}>
-        {content}
-      </Link>
-    );
-  }
-  return (
-    <button onClick={onClick} className={className}>
-      {content}
-    </button>
-  );
-};
-
-/**
- * The centerpiece. Master loop video + mouth overlay in a framed container
- * with subtle corner accents. Breathes when idle, lights up when speaking.
- */
-const AvatarStage: React.FC<{
-  avatar: Avatar;
-  aiState: AiState;
-  activeAudioNode: AudioBufferSourceNode | null;
-  audioContext: AudioContext | null;
-}> = ({ avatar, aiState, activeAudioNode, audioContext }) => {
-  const isVocalizing = aiState === "vocalizing";
-  const isThinking = aiState === "thinking";
-
-  return (
-    <div className="relative w-full max-w-sm md:max-w-md aspect-[3/4] rounded-[12px] overflow-hidden shadow-2xl shadow-primary/5">
-      {/* Corner accents — understated, not loud */}
-      <div
-        className={`absolute top-0 left-0 w-6 h-6 border-t border-l transition-all duration-500 z-20 pointer-events-none
-          ${isVocalizing ? "border-primary" : "border-white/20"}`}
-      />
-      <div
-        className={`absolute top-0 right-0 w-6 h-6 border-t border-r transition-all duration-500 z-20 pointer-events-none
-          ${isVocalizing ? "border-primary" : "border-white/20"}`}
-      />
-      <div
-        className={`absolute bottom-0 left-0 w-6 h-6 border-b border-l transition-all duration-500 z-20 pointer-events-none
-          ${isVocalizing ? "border-primary" : "border-white/20"}`}
-      />
-      <div
-        className={`absolute bottom-0 right-0 w-6 h-6 border-b border-r transition-all duration-500 z-20 pointer-events-none
-          ${isVocalizing ? "border-primary" : "border-white/20"}`}
-      />
-
-      {/* Thinking overlay */}
-      <AnimatePresence>
-        {isThinking && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center"
-          >
-            <Brain className="text-primary w-10 h-10 animate-pulse mb-3" />
-            <p className="text-[10px] font-bold text-primary uppercase tracking-[0.3em]">
-              Processing...
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Master loop video */}
-      <video
-        src={getAssetUrl(avatar.masterVideoUrl || "")}
-        className={`w-full h-full object-cover transition-all duration-700
-          ${isVocalizing ? "scale-105 saturate-100 brightness-100" : "scale-100 saturate-[0.4] brightness-90"}`}
-        autoPlay
-        loop
-        muted
-        playsInline
-      />
-
-      {/* Audio-reactive mouth shadow */}
-      <MouthOverlay
-        coords={avatar.mouthCoords}
-        audioNode={activeAudioNode}
-        audioContext={audioContext}
-        active={isVocalizing}
-      />
-
-      {/* Subtle bottom status indicator */}
-      <div className="absolute bottom-3 left-3 right-3 z-20 flex items-center justify-between pointer-events-none">
-        <div className="flex items-center gap-2">
-          <div
-            className={`w-1.5 h-1.5 rounded-full transition-all
-              ${isVocalizing ? "bg-primary shadow-[0_0_8px] shadow-primary animate-pulse" : "bg-white/30"}`}
-          />
-          <span className="text-[9px] font-bold text-white/60 uppercase tracking-widest">
-            {isVocalizing ? "Speaking" : isThinking ? "Thinking" : "Idle"}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-/**
- * Transcript sidebar. On desktop it's a column to the right of the avatar.
- * On mobile it's a slide-over drawer from the right edge.
- */
-const TranscriptPanel: React.FC<{
-  messages: Message[];
-  avatarName: string;
-  isMobileOpen: boolean;
-  onMobileClose: () => void;
-}> = ({ messages, avatarName, isMobileOpen, onMobileClose }) => {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to latest message
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages.length]);
-
-  const content = (
-    <div className="flex flex-col h-full bg-[#0a0a0a] border-l border-white/5">
-      {/* Header */}
-      <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <MessageSquare size={14} className="text-primary" />
-          <span className="text-[11px] font-bold text-white/80 uppercase tracking-wider">
-            Transcript
-          </span>
-        </div>
-        {/* Close button only on mobile */}
-        <button
-          onClick={onMobileClose}
-          className="lg:hidden p-1 text-white/40 hover:text-white"
-        >
-          <X size={16} />
-        </button>
-      </div>
-
-      {/* Messages */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
-      >
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center px-6 py-12">
-            <Sparkles className="text-white/20 mb-3" size={24} />
-            <p className="text-xs text-white/40">
-              No messages yet. Send something to start talking with{" "}
-              <span className="text-primary font-bold">{avatarName}</span>.
-            </p>
-          </div>
-        ) : (
-          messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[85%] px-3 py-2 rounded-[10px] text-xs leading-relaxed
-                  ${
-                    m.role === "user"
-                      ? "bg-sky-500/10 border border-sky-500/20 text-sky-100 rounded-br-sm"
-                      : "bg-primary/5 border border-primary/20 text-white rounded-bl-sm"
-                  }`}
-              >
-                <div
-                  className={`text-[9px] font-bold uppercase mb-1 tracking-wider
-                    ${m.role === "user" ? "text-sky-400/70" : "text-primary/70"}`}
-                >
-                  {m.role === "user" ? "You" : avatarName}
-                </div>
-                <div>{m.text}</div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-
-  return (
-    <>
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:flex w-80 shrink-0">{content}</aside>
-
-      {/* Mobile drawer */}
-      <AnimatePresence>
-        {isMobileOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="lg:hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-40"
-              onClick={onMobileClose}
-            />
-            <motion.aside
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 260 }}
-              className="lg:hidden fixed right-0 top-0 bottom-0 w-[85vw] max-w-sm z-50"
-            >
-              {content}
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
-    </>
-  );
-};
-
-// ─── Main Component ───────────────────────────────────────────────────────────
-
-const ChatRoom: React.FC = () => {
+const AvatarChatPage = () => {
   const { id } = useParams();
   const router = useRouter();
 
   const [avatar, setAvatar] = useState<Avatar | null>(null);
-  const [credits, setCredits] = useState({ remaining: 0, isLow: false });
-  const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [aiState, setAiState] = useState<AiState>("idle");
-  const [streamedText, setStreamedText] = useState("");
-  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
-  // Audio source exposed to MouthOverlay
-  const [activeAudioNode, setActiveAudioNode] =
-    useState<AudioBufferSourceNode | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [engineState, setEngineState] = useState<EngineState>("idle");
 
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const wordIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [caption, setCaption] = useState("");
+  const [captionDone, setCaptionDone] = useState(true);
+  const [audioFailed, setAudioFailed] = useState(false);
 
-  const isChatLocked = credits.remaining <= 0;
+  const [leftOpen, setLeftOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
 
-  // ── Init ──
-  const initializeNode = useCallback(async () => {
-    try {
-      const response: any = await getAvatarById(id as string);
-      const avatarData = response.avatar || response;
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const recognitionRef = useRef<any>(null);
+  const interimTextRef = useRef("");
 
-      if (!avatarData || avatarData.status !== "ready") {
-        toast.error("Neural Node not ready for chat.");
+  const historyEndRef = useRef<HTMLDivElement | null>(null);
+  const typeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  /* ── Load avatar + history ─────────────────────────────────────── */
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await getAvatarById(id as string);
+        setAvatar(data);
+        try {
+          const history = await getChatHistory(id as string);
+          setMessages(history);
+          const lastAvatarMsg = [...history]
+            .reverse()
+            .find((m) => m.role === "avatar");
+          if (lastAvatarMsg) {
+            setCaption(lastAvatarMsg.text);
+            setCaptionDone(true);
+          }
+        } catch {
+          // History fetch failed — start with an empty conversation, don't block the page
+        }
+      } catch (err) {
+        setLoadError(true);
+        toast.error("Could not load this twin. Returning to directory.");
         router.push("/avatars");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [id, router]);
+
+  /* ── Auto-scroll chat history ────────────────────────────────────── */
+  useEffect(() => {
+    historyEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, rightOpen]);
+
+  /* ── Cleanup on unmount ───────────────────────────────────────────── */
+  useEffect(() => {
+    return () => {
+      if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+    };
+  }, []);
+
+  /* ── Fallback: word-timer caption (no audio available) ──────────── */
+  const playCaptionTimer = useCallback((text: string) => {
+    if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
+    setCaption("");
+    setCaptionDone(false);
+    setEngineState("speaking");
+    let i = 0;
+    typeIntervalRef.current = setInterval(() => {
+      i++;
+      setCaption(text.slice(0, i));
+      if (i >= text.length) {
+        if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
+        setCaptionDone(true);
+        setEngineState("idle");
+      }
+    }, 22);
+  }, []);
+
+  /* ── Primary: audio playback with caption synced to playback time ──
+   * Uses the same testAvatarSpeech(voiceId, text) endpoint the Avatars
+   * grid already uses for voice previews — the backend's chat.interact
+   * route returns text + voiceId only, it does not synthesize audio
+   * itself, so synthesis happens client-side via this call.
+   */
+  const playCaptionWithAudio = useCallback(
+    async (text: string, voiceId?: string) => {
+      if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
+      setCaption("");
+      setCaptionDone(false);
+      setAudioFailed(false);
+
+      if (!voiceId) {
+        playCaptionTimer(text);
         return;
       }
 
-      setAvatar(avatarData);
-      setCredits(response.credits || { remaining: 100, isLow: false });
-
-      const historyData = await getChatHistory(id as string);
-      if (historyData) {
-        setMessages(
-          historyData.map((m: any) => ({
-            id: m._id,
-            role: m.role,
-            text: m.text,
-          })),
-        );
-      }
-    } catch (err) {
-      router.push("/avatars");
-    }
-  }, [id, router]);
-
-  useEffect(() => {
-    if (id) initializeNode();
-    return () => {
-      audioCtxRef.current?.close();
-      if (wordIntervalRef.current) clearInterval(wordIntervalRef.current);
-    };
-  }, [id, initializeNode]);
-
-  // ── Browser TTS fallback ──
-  const playFallbackSpeech = (text: string) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    utterance.voice = voices.find((v) => v.lang === "en-US") || voices[0];
-    utterance.rate = 1.0;
-
-    utterance.onstart = () => {
-      setAiState("vocalizing");
-      syncTextWithAudio(text, text.length * 0.08);
-    };
-    utterance.onend = () => {
-      setAiState("idle");
-      setMessages((prev) => [
-        ...prev,
-        { id: Date.now().toString(), role: "avatar", text },
-      ]);
-      setStreamedText("");
-    };
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const syncTextWithAudio = useCallback((text: string, duration: number) => {
-    if (wordIntervalRef.current) clearInterval(wordIntervalRef.current);
-    const words = text.split(" ");
-    const msPerWord = (duration * 1000) / words.length;
-    let idx = 0;
-    wordIntervalRef.current = setInterval(() => {
-      if (idx < words.length) {
-        setStreamedText(words.slice(0, idx + 1).join(" "));
-        idx++;
-      } else {
-        if (wordIntervalRef.current) clearInterval(wordIntervalRef.current);
-      }
-    }, msPerWord);
-  }, []);
-
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!message.trim() || !avatar || aiState !== "idle" || isChatLocked)
-      return;
-
-    const userText = message;
-    setMessages((prev) => [
-      ...prev,
-      { id: Date.now().toString(), role: "user", text: userText },
-    ]);
-    setMessage("");
-    setAiState("thinking");
-    setStreamedText("");
-
-    try {
-      const response: any = await sendMessageToAvatar(avatar._id, userText);
-      const reply = response?.data?.reply || response?.reply;
-      if (!reply) throw new Error("No response");
+      setEngineState("speaking");
+      const words = text.split(/\s+/).filter(Boolean);
 
       try {
-        // const audioBlob = await testAvatarSpeech(avatar.voiceId!, reply);
-        const audioBlob = await testAvatarSpeech(avatar.voiceId!, reply);
-        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioBlob = await testAvatarSpeech(voiceId, text);
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
 
-        setAiState("buffering");
-        if (!audioCtxRef.current)
-          audioCtxRef.current = new (
-            window.AudioContext || (window as any).webkitAudioContext
-          )();
-        const ctx = audioCtxRef.current;
-        if (ctx.state === "suspended") await ctx.resume();
-        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-
-        source.onended = () => {
-          setAiState("idle");
-          setActiveAudioNode(null);
-          setMessages((prev) => [
-            ...prev,
-            { id: Date.now().toString(), role: "avatar", text: reply },
-          ]);
-          setStreamedText("");
+        audio.ontimeupdate = () => {
+          if (!audio.duration || isNaN(audio.duration)) return;
+          const progress = Math.min(audio.currentTime / audio.duration, 1);
+          const revealCount = Math.max(1, Math.round(progress * words.length));
+          setCaption(words.slice(0, revealCount).join(" "));
         };
 
-        setAiState("vocalizing");
-        setActiveAudioNode(source);
-        syncTextWithAudio(reply, audioBuffer.duration);
-        source.start(ctx.currentTime + 0.1);
-      } catch (audioErr) {
-        playFallbackSpeech(reply);
+        audio.onended = () => {
+          setCaption(text);
+          setCaptionDone(true);
+          setEngineState("idle");
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        audio.onerror = () => {
+          setAudioFailed(true);
+          URL.revokeObjectURL(audioUrl);
+          playCaptionTimer(text);
+        };
+
+        await audio.play();
+      } catch (err) {
+        // Synthesis failed (no credits, network, etc.) — still show the reply
+        setAudioFailed(true);
+        playCaptionTimer(text);
+      }
+    },
+    [playCaptionTimer],
+  );
+
+  /* ── Core send — shared by text input and voice transcript ──────── */
+  const dispatchMessage = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isSending) return;
+
+    const userMsg: ChatMessage = {
+      _id: `local_${Date.now()}`,
+      role: "user",
+      text: trimmed,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInputText("");
+    setIsSending(true);
+    setEngineState("listening");
+
+    try {
+      const res: any = await sendMessageToAvatar(id as string, trimmed);
+      const replyText: string = res?.data?.reply ?? res?.reply ?? "";
+      const voiceId: string | undefined =
+        res?.data?.voiceId ?? res?.voiceId ?? avatar?.voiceId;
+
+      const avatarMsg: ChatMessage = {
+        _id: `local_reply_${Date.now()}`,
+        role: "avatar",
+        text: replyText,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, avatarMsg]);
+
+      if (replyText) {
+        playCaptionWithAudio(replyText, voiceId);
+      } else {
+        setEngineState("idle");
       }
     } catch (err) {
-      setAiState("idle");
-      toast.error("Neural Link Disrupted");
+      setEngineState("idle");
+      // handleApiError inside sendMessageToAvatar already toasts
+    } finally {
+      setIsSending(false);
     }
   };
 
-  if (!avatar)
+  const handleSend = () => dispatchMessage(inputText);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  /* ── Voice input — Web Speech API transcription ──────────────────
+   * No audio-upload endpoint exists on the backend (chat.controller.ts
+   * only exposes text `interact` + `getHistory`), so voice messages are
+   * transcribed client-side and sent through the same text pipeline.
+   */
+  useEffect(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onresult = (event: any) => {
+      let interim = "";
+      let final = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) final += transcript;
+        else interim += transcript;
+      }
+      interimTextRef.current = final || interim;
+      setInputText(final || interim);
+    };
+
+    recognition.onerror = (event: any) => {
+      if (event.error === "not-allowed")
+        toast.error("Microphone access denied");
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      recognition.stop();
+    };
+  }, []);
+
+  const toggleListening = () => {
+    if (!speechSupported) {
+      toast.error("Voice input isn't supported in this browser");
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      const finalText = interimTextRef.current.trim();
+      if (finalText) {
+        dispatchMessage(finalText);
+        interimTextRef.current = "";
+      }
+    } else {
+      setInputText("");
+      interimTextRef.current = "";
+      try {
+        recognitionRef.current?.start();
+        setIsListening(true);
+      } catch {
+        // recognition already active — ignore
+      }
+    }
+  };
+
+  /* ── Guards ───────────────────────────────────────────────────────── */
+  if (loading) {
     return (
-      <div className="h-screen bg-[#050505] flex items-center justify-center">
-        <Loader2 className="animate-spin text-primary" size={32} />
+      <div className="h-[100dvh] bg-background flex items-center justify-center">
+        <Loader2 className="animate-spin text-primary" size={36} />
       </div>
     );
+  }
+
+  if (!avatar || loadError) return null;
+
+  if (avatar.status !== "ready") {
+    return (
+      <div className="h-[100dvh] bg-background flex items-center justify-center p-6">
+        <div className="text-center max-w-sm">
+          <AlertTriangle className="text-warning mx-auto mb-4" size={36} />
+          <h1 className="hud-title text-xl text-foreground normal-case mb-2">
+            {avatar.name} isn't ready yet
+          </h1>
+          <p className="text-sm text-foreground-muted mb-6">
+            This twin needs at least one photo and one voice sample connected
+            before you can chat.
+          </p>
+          <Link
+            href={`/avatars/${avatar._id}`}
+            className="inline-flex items-center gap-2 bg-primary text-background px-6 py-3 rounded-xl font-bold text-sm hover:brightness-110 transition-all"
+          >
+            <Settings2 size={16} /> Finish Setup
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const stateLabel =
+    engineState === "speaking"
+      ? "Speaking"
+      : engineState === "listening"
+        ? "Thinking"
+        : "Idle";
+  const stateColor =
+    engineState === "speaking"
+      ? "text-primary"
+      : engineState === "listening"
+        ? "text-warning"
+        : "text-foreground-subtle";
 
   return (
-    <div
-      className="flex flex-col h-screen bg-[#050505] text-white overflow-hidden"
-      style={{ fontFamily: "'IBM Plex Mono', monospace" }}
-    >
-      {/* ═══════════ TOP BAR ═══════════ */}
-      <header className="shrink-0 border-b border-white/5 bg-[#0a0a0a]/80 backdrop-blur-sm z-30">
-        <div className="px-4 md:px-6 py-3 flex items-center justify-between gap-2">
-          {/* Left: Back + Avatar name */}
-          <div className="flex items-center gap-3 min-w-0">
-            <Link
-              href="/avatars"
-              className="p-2 rounded-[8px] border border-white/10 text-white/60 hover:text-white hover:bg-white/5 transition-all shrink-0"
-            >
-              <ChevronLeft size={14} />
-            </Link>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0" />
-                <h1 className="text-sm font-bold text-white truncate">
-                  {avatar.name}
-                </h1>
-              </div>
-              <p className="text-[10px] text-white/40 uppercase tracking-widest">
-                Neural Link Active
-              </p>
-            </div>
-          </div>
-
-          {/* Right: Action buttons */}
-          <div className="flex items-center gap-2 shrink-0">
-            <ActionButton
-              icon={<Database size={14} />}
-              label="Memory"
-              href={`/avatars/${avatar._id}`}
-            />
-            <ActionButton
-              icon={<Settings size={14} />}
-              label="Config"
-              href={`/avatars/${avatar._id}`}
-            />
-            {/* Mobile transcript toggle */}
-            <button
-              onClick={() => setIsTranscriptOpen(true)}
-              className="lg:hidden p-2 rounded-[8px] border border-white/10 text-white/60 hover:text-white hover:bg-white/5 transition-all relative"
-            >
-              <Menu size={14} />
-              {messages.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-black text-[9px] font-bold rounded-full flex items-center justify-center">
-                  {messages.length > 9 ? "9+" : messages.length}
-                </span>
-              )}
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ═══════════ MAIN CONTENT (Stage + Sidebar) ═══════════ */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Stage area */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-[radial-gradient(ellipse_at_center,_#0a0a0a_0%,_#050505_70%)]">
-          {/* Avatar centered */}
-          <div className="flex-1 flex items-center justify-center px-4 py-6 overflow-hidden">
-            <AvatarStage
-              avatar={avatar}
-              aiState={aiState}
-              activeAudioNode={activeAudioNode}
-              audioContext={audioCtxRef.current}
-            />
-          </div>
-
-          {/* Typing response area — sits right above input */}
-          <div className="shrink-0 px-4 md:px-6 min-h-[60px] flex items-end justify-center">
-            <AnimatePresence mode="wait">
-              {aiState === "thinking" && (
-                <motion.div
-                  key="thinking"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-2 text-white/50 pb-2"
-                >
-                  <span className="text-xs">{avatar.name} is thinking</span>
-                  <span className="flex gap-1">
-                    {[0, 1, 2].map((i) => (
-                      <motion.span
-                        key={i}
-                        className="w-1 h-1 rounded-full bg-primary"
-                        animate={{ opacity: [0.3, 1, 0.3] }}
-                        transition={{
-                          duration: 1,
-                          repeat: Infinity,
-                          delay: i * 0.2,
-                        }}
-                      />
-                    ))}
-                  </span>
-                </motion.div>
-              )}
-
-              {aiState === "vocalizing" && streamedText && (
-                <motion.div
-                  key="typing"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="w-full max-w-2xl pb-2"
-                >
-                  <div className="text-[10px] font-bold text-primary/70 uppercase tracking-widest mb-1">
-                    {avatar.name}
-                  </div>
-                  <p className="text-sm md:text-base text-white leading-relaxed">
-                    {streamedText}
-                    <motion.span
-                      animate={{ opacity: [1, 0] }}
-                      transition={{ duration: 0.6, repeat: Infinity }}
-                      className="inline-block w-[2px] h-4 bg-primary ml-1 align-middle"
-                    />
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Input bar */}
-          <div className="shrink-0 px-4 md:px-6 pb-4 md:pb-6 pt-2">
-            <form
-              onSubmit={handleSendMessage}
-              className={`flex items-center gap-2 bg-[#0a0a0a] border rounded-[12px] overflow-hidden transition-all
-                ${isChatLocked ? "border-red-900/50" : "border-white/10 focus-within:border-primary/50"}`}
-            >
-              <input
-                ref={inputRef}
-                type="text"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                disabled={aiState !== "idle" || isChatLocked}
-                placeholder={
-                  isChatLocked
-                    ? "Credits depleted"
-                    : `Message ${avatar.name}...`
-                }
-                className="flex-1 bg-transparent border-none outline-none py-4 px-4 text-sm text-white placeholder:text-white/30 disabled:opacity-50"
-              />
-              <button
-                type="submit"
-                disabled={!message.trim() || aiState !== "idle" || isChatLocked}
-                className="shrink-0 m-1.5 h-10 w-10 flex items-center justify-center bg-primary text-black rounded-[8px] disabled:opacity-30 disabled:bg-white/10 disabled:text-white/40 hover:brightness-110 transition-all"
-              >
-                {aiState === "idle" ? (
-                  <Send size={16} />
-                ) : (
-                  <Loader2 size={16} className="animate-spin" />
-                )}
-              </button>
-            </form>
-          </div>
-        </main>
-
-        {/* Sidebar — desktop only here; mobile drawer rendered inside TranscriptPanel */}
-        <TranscriptPanel
-          messages={messages}
-          avatarName={avatar.name}
-          isMobileOpen={isTranscriptOpen}
-          onMobileClose={() => setIsTranscriptOpen(false)}
+    <div className="h-[90vh] w-full bg-background text-foreground flex overflow-hidden scrollbar-theme">
+      {/* ── Left panel — avatar info — desktop static, mobile slide-over ── */}
+      <aside className="hidden lg:flex flex-col w-70 xl:w-90 border-r border-border shrink-0 bg-surface">
+        <LeftPanelContent
+          avatar={avatar}
+          stateLabel={stateLabel}
+          stateColor={stateColor}
         />
-      </div>
+      </aside>
 
-      {/* ═══════════ Locked Overlay ═══════════ */}
       <AnimatePresence>
-        {isChatLocked && (
+        {leftOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center"
+            className="lg:hidden fixed inset-0 z-40 bg-overlay backdrop-blur-sm"
+            onClick={() => setLeftOpen(false)}
           >
-            <AlertCircle
-              size={48}
-              className="text-red-500 mb-4 animate-pulse"
-            />
-            <h2 className="text-2xl md:text-3xl font-bold text-white mb-2">
-              Credits Depleted
-            </h2>
-            <p className="max-w-md text-sm text-white/50 mb-8">
-              Neural energy has run out. Please replenish credits to resume
-              communication.
-            </p>
-            <Link
-              href="/avatars"
-              className="px-6 py-3 border border-white/20 rounded-[8px] text-white font-bold text-sm hover:bg-white hover:text-black transition-all"
+            <motion.aside
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "tween", duration: 0.22 }}
+              className="h-full w-[80%] max-w-xs bg-surface border-r border-border flex flex-col"
+              onClick={(e) => e.stopPropagation()}
             >
-              Go to Dashboard
-            </Link>
+              <div className="flex items-center justify-between px-3 py-2.5 border-b border-border shrink-0">
+                <span className="hud-title text-xs text-foreground normal-case">
+                  Twin Info
+                </span>
+                <button
+                  onClick={() => setLeftOpen(false)}
+                  className="text-foreground-subtle"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <LeftPanelContent
+                avatar={avatar}
+                stateLabel={stateLabel}
+                stateColor={stateColor}
+              />
+            </motion.aside>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ── Center — avatar viewport, caption, input ────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0  overflow-hidden">
+        {/* Mobile top bar */}
+        <div className="lg:hidden flex items-center justify-between px-2 py-2 border-b border-border shrink-0">
+          <button
+            onClick={() => setLeftOpen(true)}
+            className="p-1.5 rounded-lg text-foreground-muted hover:text-primary transition-colors"
+          >
+            <PanelLeft size={18} />
+          </button>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${engineState === "idle" ? "bg-foreground-subtle" : "bg-primary animate-pulse"}`}
+            />
+            <span className="text-sm font-bold">{avatar.name}</span>
+          </div>
+          <button
+            onClick={() => setRightOpen(true)}
+            className="p-1.5 rounded-lg text-foreground-muted hover:text-primary transition-colors"
+          >
+            <PanelRight size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-2 py-2 md:px-4 md:py-3">
+          <div className="relative w-full max-w-[min(58vh,24rem)] aspect-square rounded-2xl border border-border bg-surface overflow-hidden shrink-0">
+            <div
+              className="absolute inset-0 rounded-2xl transition-shadow duration-500 pointer-events-none"
+              style={{
+                boxShadow:
+                  engineState === "speaking"
+                    ? "inset 0 0 0 2px var(--arklife-primary), 0 0 40px rgba(24,185,205,0.25)"
+                    : engineState === "listening"
+                      ? "inset 0 0 0 2px var(--warning), 0 0 40px rgba(245,158,11,0.15)"
+                      : "inset 0 0 0 1px var(--border-color)",
+              }}
+            />
+
+            {avatar.heroImageUrl ? (
+              <motion.img
+                src={getAssetUrl(avatar.heroImageUrl)}
+                alt={avatar.name}
+                className="w-full h-full object-cover"
+                animate={{ scale: engineState === "speaking" ? 1.02 : 1 }}
+                transition={{
+                  duration: 1.2,
+                  repeat: engineState === "speaking" ? Infinity : 0,
+                  repeatType: "reverse",
+                }}
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-foreground-subtle">
+                <MessageSquare size={40} strokeWidth={1} />
+                <span className="hud-label">3D Avatar — Coming Soon</span>
+              </div>
+            )}
+
+            <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 bg-background/70 backdrop-blur-md border border-border px-2 py-0.5 rounded-full">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  engineState === "speaking"
+                    ? "bg-primary animate-pulse"
+                    : engineState === "listening"
+                      ? "bg-warning animate-pulse"
+                      : "bg-foreground-subtle"
+                }`}
+              />
+              <span className="hud-label">{stateLabel}</span>
+            </div>
+          </div>
+
+          {/* Live caption */}
+          <div className="w-full max-w-[min(58vh,24rem)] min-h-[3.5rem] bg-surface border border-border rounded-xl px-3.5 py-2.5 shrink-0">
+            <span className="hud-label mb-1 flex items-center gap-1.5 text-primary/80">
+              {audioFailed ? (
+                <>
+                  <VolumeX size={11} /> Caption (audio unavailable)
+                </>
+              ) : (
+                <>
+                  <Volume2 size={11} /> Live Caption
+                </>
+              )}
+            </span>
+            <p className="text-sm text-foreground leading-relaxed line-clamp-3">
+              {caption ? (
+                <>
+                  {caption}
+                  {!captionDone && (
+                    <span className="inline-block w-1.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
+                  )}
+                </>
+              ) : (
+                <span className="text-foreground-subtle">
+                  Say hello to start the conversation with {avatar.name}.
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Sticky input bar */}
+        <div className="shrink-0 border-t border-border bg-surface px-2 py-2 md:px-4 md:py-2.5">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleListening}
+              disabled={isSending}
+              className={`shrink-0 w-10 h-10 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-40 ${
+                isListening
+                  ? "bg-error/15 border-error/50 text-error"
+                  : "border-border text-foreground-muted hover:text-primary hover:border-primary/40"
+              }`}
+              title={
+                speechSupported
+                  ? "Voice message"
+                  : "Voice input not supported in this browser"
+              }
+            >
+              {isListening ? <MicOff size={17} /> : <Mic size={17} />}
+            </button>
+
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isSending}
+              placeholder={
+                isListening ? "Listening..." : `Message ${avatar.name}...`
+              }
+              className="flex-1 min-w-0 bg-background border border-border rounded-lg px-3.5 py-2.5 text-sm outline-none focus:border-primary/60 transition-colors disabled:opacity-60"
+            />
+
+            <button
+              onClick={handleSend}
+              disabled={isSending || !inputText.trim()}
+              className="shrink-0 w-10 h-10 rounded-lg bg-primary text-background flex items-center justify-center disabled:opacity-30 hover:brightness-110 transition-all"
+            >
+              {isSending ? (
+                <Loader2 size={17} className="animate-spin" />
+              ) : (
+                <Send size={16} />
+              )}
+            </button>
+          </div>
+          {isListening && (
+            <p className="hud-label text-error mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse" />{" "}
+              Recording — tap mic to send
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right panel — chat history — desktop static, mobile slide-over ── */}
+      <aside className="hidden lg:flex flex-col w-90 xl:w-100 border-l border-border shrink-0 bg-surface">
+        <RightPanelContent messages={messages} historyEndRef={historyEndRef} />
+      </aside>
+
+      <AnimatePresence>
+        {rightOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="lg:hidden fixed inset-0 z-40 bg-overlay backdrop-blur-sm"
+            onClick={() => setRightOpen(false)}
+          >
+            <motion.aside
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "tween", duration: 0.22 }}
+              className="h-full w-[80%] max-w-xs bg-surface border-l border-border flex flex-col ml-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-3 py-2.5 border-b border-border shrink-0">
+                <span className="hud-title text-xs text-foreground normal-case">
+                  Conversation
+                </span>
+                <button
+                  onClick={() => setRightOpen(false)}
+                  className="text-foreground-subtle"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <RightPanelContent
+                messages={messages}
+                historyEndRef={historyEndRef}
+              />
+            </motion.aside>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Themed scrollbars */}
+      <style jsx global>{`
+        .scrollbar-theme *::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .scrollbar-theme *::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .scrollbar-theme *::-webkit-scrollbar-thumb {
+          background: var(--border-color);
+          border-radius: 999px;
+        }
+        .scrollbar-theme *::-webkit-scrollbar-thumb:hover {
+          background: var(--arklife-primary);
+        }
+        .scrollbar-theme * {
+          scrollbar-width: thin;
+          scrollbar-color: var(--border-color) transparent;
+        }
+      `}</style>
     </div>
   );
 };
 
-export default ChatRoom;
+/* ── Left panel — avatar identity + settings link, no chat content ──── */
+const LeftPanelContent = ({
+  avatar,
+  stateLabel,
+  stateColor,
+}: {
+  avatar: Avatar;
+  stateLabel: string;
+  stateColor: string;
+}) => (
+  <>
+    <div className="p-3 border-b border-border shrink-0">
+      <Link
+        href="/avatars"
+        className="hud-label flex items-center gap-1.5 text-foreground-subtle hover:text-foreground transition-colors"
+      >
+        <ChevronLeft size={14} /> All Twins
+      </Link>
+    </div>
+
+    <div className="p-3 flex flex-col items-center text-center border-b border-border shrink-0">
+      <div className="w-20 h-20 rounded-full overflow-hidden bg-surface-elevated border border-border shrink-0 mb-2.5">
+        {avatar.heroImageUrl && (
+          <img
+            src={getAssetUrl(avatar.heroImageUrl)}
+            className="w-full h-full object-cover"
+            alt={avatar.name}
+          />
+        )}
+      </div>
+      <p className="text-sm font-bold truncate w-full">{avatar.name}</p>
+      <p className={`hud-label mt-0.5 ${stateColor}`}>{stateLabel}</p>
+    </div>
+
+    <div className="p-3 space-y-1.5 flex-1">
+      <InfoRow label="Photos" value={avatar.photoUrls?.length ?? 0} />
+      <InfoRow
+        label="Voice Samples"
+        value={avatar.voiceSampleUrls?.length ?? 0}
+      />
+      <InfoRow label="Status" value={avatar.status} />
+    </div>
+
+    <div className="p-3 border-t border-border shrink-0">
+      <Link
+        href={`/avatars/${avatar._id}`}
+        className="w-full flex items-center justify-center gap-2 bg-surface-elevated border border-border hover:border-primary/40 text-foreground-muted hover:text-primary px-3 py-2.5 rounded-lg text-xs font-bold transition-colors"
+      >
+        <Settings2 size={14} /> Edit Twin
+      </Link>
+    </div>
+  </>
+);
+
+const InfoRow = ({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) => (
+  <div className="flex items-center justify-between px-1 py-1.5">
+    <span className="hud-label">{label}</span>
+    <span className="hud-metric text-xs text-foreground capitalize">
+      {value}
+    </span>
+  </div>
+);
+
+/* ── Right panel — chat history only ─────────────────────────────────── */
+const RightPanelContent = ({
+  messages,
+  historyEndRef,
+}: {
+  messages: ChatMessage[];
+  historyEndRef: any;
+}) => (
+  <>
+    <div className="px-3 py-2.5 border-b border-border shrink-0">
+      <h2 className="hud-title text-xs text-foreground normal-case">
+        Conversation
+      </h2>
+    </div>
+    <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5 space-y-1.5">
+      {messages.length === 0 && (
+        <p className="text-xs text-foreground-subtle text-center mt-8 px-2">
+          No messages yet. Say hello to start.
+        </p>
+      )}
+      {messages.map((m) => (
+        <MessageBubble key={m._id} message={m} />
+      ))}
+      <div ref={historyEndRef} />
+    </div>
+  </>
+);
+
+const MessageBubble = ({ message }: { message: ChatMessage }) => {
+  const isUser = message.role === "user";
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[88%] rounded-xl px-3 py-1.5 text-xs leading-relaxed ${
+          isUser
+            ? "bg-primary text-background rounded-br-sm"
+            : "bg-surface-elevated border border-border text-foreground rounded-bl-sm"
+        }`}
+      >
+        {message.text}
+      </div>
+    </div>
+  );
+};
+
+export default AvatarChatPage;
