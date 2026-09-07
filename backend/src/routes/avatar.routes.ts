@@ -5,7 +5,8 @@ import { avatarUpload } from "../config/multerAvatar";
 
 const router = Router();
 
-router.get("/delete", avatarController.clearAllVoices);
+router.get("/test-replicate", avatarController.generateTestAvatar);
+// router.get("/delete", avatarController.clearAllVoices);
 router.use(authenticate);
 
 // --- Core CRUD ---

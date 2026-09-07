@@ -45,6 +45,7 @@ const server = app.listen(PORT, () => {
   🌐 Frontend: ${process.env.FRONTEND_URL || "http://localhost:3000"}
   📅 Time: ${new Date().toLocaleString()}
   `);
+  // testRawHttpsToD_ID(process.env.DID_API_KEY || "");
 });
 
 // Graceful shutdown

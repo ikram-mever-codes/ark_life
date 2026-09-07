@@ -226,12 +226,6 @@ export const testAvatarSpeech = async (
   }
 };
 
-// ... existing imports
-
-/**
- * POST /api/v1/avatars/:id/remove-asset
- * Removes a photo or voice sample from the avatar's identity matrix.
- */
 export const removeAvatarAsset = async (
   id: string,
   payload: { url: string; type: "photo" | "voice" },
@@ -242,7 +236,7 @@ export const removeAvatarAsset = async (
       payload,
     );
     if (response.success) {
-      return response.avatar;
+      return response.data.avatar;
     }
     throw new Error(response.message || "Removal failed");
   } catch (error) {

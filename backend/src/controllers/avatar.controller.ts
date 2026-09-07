@@ -8,7 +8,12 @@ import Avatar from "../models/Avatar";
 import User from "../models/User";
 import MemoryVault from "../models/MemoryVault";
 import { AVATAR_UPLOAD_BASE } from "../config/multerAvatar";
-import { generateMasterLoop } from "../utils/generateMasterLoop";
+import { createDIDTalk, checkDIDTalkStatus } from "../services/dIdService";
+import Replicate from "replicate";
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -18,23 +23,138 @@ cloudinary.config({
 
 const VOICE_SAMPLES_REQUIRED = 1;
 
-// Tier Definitions
-const TIER_LIMITS = {
-  free: 1,
-  pro: 5,
-  business: 20,
-};
+/**
+ * The D-ID master video is a single fixed idle-loop clip — it is NOT
+ * regenerated per chat message. It plays muted in the chat UI while the
+ * real reply audio comes from ElevenLabs separately, so this script's
+ * WORDS are never heard — only the mouth movement they produce matters,
+ * and only as a generic, natural-looking loop.
+ */
+const IDLE_LOOP_SCRIPT_TEXT =
+  "I'm here whenever you'd like to talk, so feel free to ask me anything on your mind.";
+
+const DID_PROVIDER = {
+  type: "microsoft",
+  voice_id: "en-US-JennyNeural",
+} as const;
+
+/**
+ * PLATFORM CONSTRAINT: this backend runs behind AWS API Gateway, which
+ * enforces a hard 29-second timeout on every request — not configurable,
+ * not raisable, independent of the Lambda's own timeout setting. A
+ * request that hasn't responded by 29s is killed outright (client sees
+ * no status/response at all, and Lambda may be reinvoked).
+ *
+ * D-ID's own docs state /talks typically resolves in 10-30s, and we've
+ * observed jobs finishing in ~5s in practice. But cloneVoice ALSO calls
+ * ElevenLabs first, which has already consumed several seconds of the
+ * 29s budget by the time D-ID generation starts. So the in-request poll
+ * here must be short and conservative — long enough to catch the common
+ * fast case, short enough to always leave room to respond before 29s.
+ */
+const DID_QUICK_POLL_INTERVAL_MS = 2500;
+const DID_QUICK_POLL_MAX_ATTEMPTS = 6; // ~15s worst case
+
+// Separate, longer timeout used by getOne() when picking up a job that
+// didn't finish during the quick poll — this runs across multiple
+// requests (the frontend's 5s poll loop), so it isn't bound by the 29s
+// single-request limit.
+const DID_JOB_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Creates the D-ID talk job and saves the job id/timestamp on the avatar.
+ * Does not poll — callers decide how long to wait, if at all, given the
+ * request-timeout budget they have left. Does not save(); callers save
+ * once alongside their other field changes.
+ */
+async function createMasterVideoJob(avatar: InstanceType<typeof Avatar>) {
+  if (!avatar.heroImageUrl) {
+    avatar.masterVideoError = "No hero image set — cannot generate a video.";
+    avatar.masterVideoUrl = null;
+    avatar.didTalkId = null;
+    avatar.didTalkCreatedAt = null;
+    return;
+  }
+
+  try {
+    const talkId = await createDIDTalk({
+      sourceUrl: avatar.heroImageUrl,
+      scriptText: IDLE_LOOP_SCRIPT_TEXT,
+      provider: DID_PROVIDER,
+    });
+
+    avatar.didTalkId = talkId;
+    avatar.didTalkCreatedAt = new Date();
+    avatar.masterVideoError = null;
+    avatar.status = "training";
+  } catch (err: any) {
+    console.error("[D-ID] Talk creation failed:", err.message);
+    avatar.status = "ready";
+    avatar.didTalkId = null;
+    avatar.didTalkCreatedAt = null;
+    avatar.masterVideoError =
+      "Video generation could not start. Chat will use the still image instead.";
+  }
+}
+
+/**
+ * Polls an already-created job for a SHORT, bounded window (see the
+ * constants above) so a fast-finishing job can be returned in the same
+ * response that created it. If it doesn't finish in that window, this
+ * returns without error — the job is left in "training" for getOne() to
+ * pick up on a later request. This function only ever moves status to
+ * "ready"; it never times the job out itself (getOne owns that, since it
+ * can measure elapsed time across the job's full lifetime, not just this
+ * one short window).
+ */
+async function quickPollMasterVideo(avatar: InstanceType<typeof Avatar>) {
+  if (!avatar.didTalkId) return;
+
+  for (let attempt = 0; attempt < DID_QUICK_POLL_MAX_ATTEMPTS; attempt++) {
+    try {
+      const { status, result_url } = await checkDIDTalkStatus(avatar.didTalkId);
+
+      if (status === "done" && result_url) {
+        avatar.masterVideoUrl = result_url;
+        avatar.masterVideoError = null;
+        avatar.status = "ready";
+        return;
+      }
+
+      if (status === "error" || status === "rejected") {
+        console.error(
+          `[quickPollMasterVideo] D-ID talk ${avatar.didTalkId} failed with status: ${status}`,
+        );
+        avatar.status = "ready";
+        avatar.masterVideoError =
+          "Video generation failed. Chat will use the still image instead.";
+        return;
+      }
+      // still processing — fall through to wait + retry
+    } catch (err: any) {
+      // Transient network hiccup on our side checking D-ID — don't fail
+      // the job over it, just stop the quick-poll early and let getOne's
+      // longer-lived polling take over on the next request.
+      console.error("[quickPollMasterVideo] status check failed:", err.message);
+      return;
+    }
+
+    if (attempt < DID_QUICK_POLL_MAX_ATTEMPTS - 1) {
+      await sleep(DID_QUICK_POLL_INTERVAL_MS);
+    }
+  }
+  // Exhausted the short window without resolving — leave status as
+  // "training" with didTalkId set. getOne() continues checking it.
+}
 
 export class AvatarController {
-  /**
-   * CREATE: Initializes a new digital twin with tier-based limits.
-   */
   create = async (req: AuthRequest, res: Response) => {
     const userId = req.user?._id;
     const { name, description } = req.body;
 
     try {
-      // Check if user exists to ensure valid association
       const user = await User.findById(userId);
       if (!user) {
         return res
@@ -42,13 +162,11 @@ export class AvatarController {
           .json({ success: false, message: "User not found" });
       }
 
-      // Ensure a MemoryVault exists for the user
       let vault = await MemoryVault.findOne({ userId });
       if (!vault) {
         vault = await MemoryVault.create({ userId, files: [] });
       }
 
-      // Create the avatar without tier-based restrictions
       const avatar = await Avatar.create({
         userId,
         name,
@@ -60,7 +178,10 @@ export class AvatarController {
         voiceSampleUrls: [],
         voiceId: null,
         masterVideoUrl: null,
+        masterVideoError: null,
         mouthCoords: null,
+        didTalkId: null,
+        didTalkCreatedAt: null,
       });
 
       return res
@@ -72,9 +193,7 @@ export class AvatarController {
         .json({ success: false, message: "Initialization handshake failed" });
     }
   };
-  /**
-   * LIST: Retrieve all nodes for the authenticated user.
-   */
+
   list = async (req: AuthRequest, res: Response) => {
     try {
       const avatars = await Avatar.find({ userId: req.user?._id })
@@ -89,25 +208,82 @@ export class AvatarController {
   };
 
   /**
-   * GET ONE: Fetch specific node details.
+   * GET ONE: If a D-ID job is in flight (status "training"), checks its
+   * status inline. This is the mechanism that picks up jobs which didn't
+   * finish during cloneVoice's short in-request poll — the frontend's
+   * existing 5s poll loop keeps calling this until it resolves.
+   *
+   * Handles three distinct failure modes:
+   *  1. D-ID reports the talk itself failed — masterVideoError set,
+   *     status degrades to "ready".
+   *  2. The status-check call itself fails (network blip) — logged, but
+   *     status/masterVideoError untouched since this is transient; next
+   *     poll retries.
+   *  3. The job has run longer than DID_JOB_TIMEOUT_MS with no resolution
+   *     at all — timed out explicitly rather than polling forever.
    */
   getOne = async (req: AuthRequest, res: Response) => {
     try {
       const avatar = await Avatar.findOne({
         _id: req.params.id,
         userId: req.user?._id,
-      }).lean();
+      });
 
-      if (!avatar)
+      if (!avatar) {
         return res
           .status(404)
           .json({ success: false, message: "Node not found" });
+      }
+
+      if (
+        avatar.status === "training" &&
+        avatar.didTalkId &&
+        !avatar.masterVideoUrl
+      ) {
+        const jobAge = avatar.didTalkCreatedAt
+          ? Date.now() - new Date(avatar.didTalkCreatedAt).getTime()
+          : 0;
+
+        if (jobAge > DID_JOB_TIMEOUT_MS) {
+          console.error(
+            `[getOne] D-ID talk ${avatar.didTalkId} timed out after ${Math.round(jobAge / 1000)}s`,
+          );
+          avatar.status = "ready";
+          avatar.masterVideoError =
+            "Video generation timed out. Chat will use the still image instead.";
+          await avatar.save();
+        } else {
+          try {
+            const { status, result_url } = await checkDIDTalkStatus(
+              avatar.didTalkId,
+            );
+
+            if (status === "done" && result_url) {
+              avatar.masterVideoUrl = result_url;
+              avatar.masterVideoError = null;
+              avatar.status = "ready";
+              await avatar.save();
+            } else if (status === "error" || status === "rejected") {
+              console.error(
+                `[getOne] D-ID talk ${avatar.didTalkId} failed with status: ${status}`,
+              );
+              avatar.status = "ready";
+              avatar.masterVideoError =
+                "Video generation failed. Chat will use the still image instead.";
+              await avatar.save();
+            }
+            // else still processing — leave status as "training", frontend polls again in 5s
+          } catch (err: any) {
+            console.error("[getOne] D-ID status check failed:", err.message);
+          }
+        }
+      }
 
       return res.status(200).json({
         success: true,
         data: {
-          avatar,
-          credits: { remaining: 10000, isLow: false }, // Mocking system credits for dashboard
+          avatar: avatar.toObject(),
+          credits: { remaining: 10000, isLow: false },
         },
       });
     } catch (error) {
@@ -117,9 +293,6 @@ export class AvatarController {
     }
   };
 
-  /**
-   * UPDATE: Modify persona parameters.
-   */
   update = async (req: AuthRequest, res: Response) => {
     try {
       const avatar = await Avatar.findOneAndUpdate(
@@ -133,9 +306,6 @@ export class AvatarController {
     }
   };
 
-  /**
-   * REMOVE: Wipe node data and local assets.
-   */
   remove = async (req: AuthRequest, res: Response) => {
     try {
       const avatar = await Avatar.findOne({
@@ -158,18 +328,22 @@ export class AvatarController {
   };
 
   /**
-   * CLONE VOICE: Syncs with ElevenLabs, then generates a local master idle loop
-   * (via ffmpeg) so chat can play a breathing video without D-ID / HeyGen credits.
+   * CLONE VOICE: Syncs with ElevenLabs, then creates the D-ID master
+   * video job HERE and attempts a short, bounded poll for it before
+   * responding — see createMasterVideoJob / quickPollMasterVideo and the
+   * API-Gateway-timeout note above. Fast jobs come back finished in this
+   * same response; slower ones are picked up by getOne()'s polling.
    */
   cloneVoice = async (req: AuthRequest, res: Response) => {
     const avatar = await Avatar.findOne({
       _id: req.params.id,
       userId: req.user?._id,
     });
-    if (!avatar)
+    if (!avatar) {
       return res
         .status(404)
         .json({ success: false, message: "Avatar not found" });
+    }
 
     if (avatar.voiceSampleUrls.length < VOICE_SAMPLES_REQUIRED) {
       return res
@@ -178,7 +352,6 @@ export class AvatarController {
     }
 
     try {
-      // ---- Step 1: Clone voice with ElevenLabs ----
       const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
         .replace(/[`'"]/g, "")
         .trim();
@@ -186,50 +359,77 @@ export class AvatarController {
       const form = new FormData();
       form.append("name", avatar.name);
 
+      const missingFiles: string[] = [];
+      let attachedCount = 0;
+
       for (const samplePath of avatar.voiceSampleUrls) {
         const fullPath = path.resolve(samplePath);
         if (fs.existsSync(fullPath)) {
           form.append("files", fs.createReadStream(fullPath));
+          attachedCount++;
+        } else {
+          missingFiles.push(fullPath);
         }
       }
 
-      const elResponse = await axios.post(
-        "https://api.elevenlabs.io/v1/voices/add",
-        form,
-        { headers: { "xi-api-key": cleanApiKey, ...form.getHeaders() } },
-      );
+      if (missingFiles.length > 0) {
+        console.error(
+          `[cloneVoice] ${missingFiles.length} voice sample(s) missing on disk:`,
+          missingFiles,
+        );
+      }
+
+      if (attachedCount === 0) {
+        return res.status(422).json({
+          success: false,
+          message:
+            "None of the stored voice samples exist on disk. Re-upload voice samples to continue.",
+        });
+      }
+
+      let elResponse;
+      try {
+        elResponse = await axios.post(
+          "https://api.elevenlabs.io/v1/voices/add",
+          form,
+          { headers: { "xi-api-key": cleanApiKey, ...form.getHeaders() } },
+        );
+      } catch (elErr: any) {
+        console.error(
+          "[cloneVoice] ElevenLabs voice creation failed:",
+          elErr.response?.data || elErr.message,
+        );
+        return res.status(502).json({
+          success: false,
+          message:
+            "Voice cloning service rejected the request. Check your voice samples and try again.",
+        });
+      }
 
       avatar.voiceId = elResponse.data?.voice_id;
 
-      // ---- Step 2: Generate the local master idle loop ----
-      // This replaces what D-ID/HeyGen would normally produce. It's a subtle
-      // breathing animation from the hero image, looped seamlessly during chat.
       if (avatar.heroImageUrl) {
-        try {
-          const masterVideoUrl = await generateMasterLoop(
-            avatar.heroImageUrl,
-            avatar._id.toString(),
-          );
-          avatar.masterVideoUrl = masterVideoUrl;
-          avatar.status = "ready";
-        } catch (loopErr: any) {
-          // Graceful degradation: voice is cloned, but loop failed.
-          // Chat will fall back to the still hero image.
-          console.error("Master loop generation failed:", loopErr.message);
-          avatar.status = "ready";
+        await createMasterVideoJob(avatar);
+        if (avatar.didTalkId) {
+          await quickPollMasterVideo(avatar);
         }
       } else {
-        // No hero image yet — user can still use voice-only mode.
         avatar.status = "draft";
+        avatar.masterVideoError =
+          "No hero image set yet — set one to generate a video.";
       }
 
       await avatar.save();
 
+      const message = avatar.masterVideoUrl
+        ? "Vocal signature synced. AI video ready."
+        : avatar.status === "training"
+          ? "Vocal signature synced. Still compiling AI video…"
+          : `Vocal signature synced. ${avatar.masterVideoError ?? "Chat will use the still image."}`;
+
       return res.status(200).json({
         success: true,
-        message: avatar.masterVideoUrl
-          ? "Vocal signature synced. Visual idle loop compiled. Neural link established."
-          : "Vocal signature synced. Neural link established.",
+        message,
         data: { avatar },
       });
     } catch (err: any) {
@@ -240,59 +440,62 @@ export class AvatarController {
     }
   };
 
-  /**
-   * UPLOAD: Stage photos and voice samples.
-   */
   upload = async (req: AuthRequest, res: Response) => {
     const avatar = await Avatar.findOne({
       _id: req.params.id,
       userId: req.user?._id,
     });
-    if (!avatar)
+    if (!avatar) {
       return res
         .status(404)
         .json({ success: false, message: "Avatar not found" });
+    }
 
     const files = (req as any).files;
 
-    if (files?.photo) {
-      const paths = files.photo.map((f: any) => f.path);
-      avatar.photoUrls = [...avatar.photoUrls, ...paths];
+    try {
+      if (files?.photo) {
+        const paths = files.photo.map((f: any) => f.path);
+        avatar.photoUrls = [...avatar.photoUrls, ...paths];
 
-      // Auto-set hero if missing
-      if (!avatar.heroImageUrl) {
-        const result = await cloudinary.uploader.upload(paths[0], {
-          folder: `arklife/avatars/${avatar._id}`,
-        });
-        avatar.heroImageUrl = result.secure_url;
+        if (!avatar.heroImageUrl) {
+          const result = await cloudinary.uploader.upload(paths[0], {
+            folder: `arklife/avatars/${avatar._id}`,
+          });
+          avatar.heroImageUrl = result.secure_url;
+        }
       }
-    }
 
-    if (files?.voiceSample) {
-      const paths = files.voiceSample.map((f: any) => f.path);
-      avatar.voiceSampleUrls = [...avatar.voiceSampleUrls, ...paths];
-    }
+      if (files?.voiceSample) {
+        const paths = files.voiceSample.map((f: any) => f.path);
+        avatar.voiceSampleUrls = [...avatar.voiceSampleUrls, ...paths];
+      }
 
-    await avatar.save();
-    return res.status(200).json({ success: true, data: { avatar } });
+      await avatar.save();
+      return res.status(200).json({ success: true, data: { avatar } });
+    } catch (err: any) {
+      console.error("[upload] Failed:", err.message);
+      return res.status(500).json({
+        success: false,
+        message: "Asset upload failed. Please try again.",
+      });
+    }
   };
 
   /**
-   * SET HERO IMAGE: Defines the face used for visual synthesis.
-   * If the avatar already has a cloned voice, regenerate the master loop
-   * so the idle video reflects the new face immediately.
-   *
-   * NOTE: When the hero image changes, mouthCoords becomes stale. We clear
-   * it here so the frontend knows to re-run detection on the new image.
+   * SET HERO IMAGE: If a voice is already cloned, kicks off a new master
+   * video job for the new hero image and attempts the same short poll as
+   * cloneVoice. Falls back to getOne() polling if it doesn't finish fast.
    */
   setHeroImage = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { url } = req.body;
     const avatar = await Avatar.findOne({ _id: id, userId: req.user?._id });
-    if (!avatar)
+    if (!avatar) {
       return res
         .status(404)
         .json({ success: false, message: "Avatar not found" });
+    }
 
     try {
       const filePath = url.startsWith("http") ? url : path.resolve(url);
@@ -300,62 +503,32 @@ export class AvatarController {
         folder: `arklife/avatars/${avatar._id}`,
       });
       avatar.heroImageUrl = result.secure_url;
+      avatar.mouthCoords = null; // hero changed → old mouth calibration invalid
+      avatar.masterVideoUrl = null; // hero changed → old video no longer matches
+      avatar.masterVideoError = null;
 
-      // Hero face changed → old mouth coordinates are invalid.
-      // Frontend will re-detect and POST new coords to /mouth-coords.
-      avatar.mouthCoords = null;
-
-      // If voice is already cloned, regenerate the master loop to match the new face.
       if (avatar.voiceId) {
-        try {
-          const masterVideoUrl = await generateMasterLoop(
-            avatar.heroImageUrl,
-            avatar._id.toString(),
-          );
-          avatar.masterVideoUrl = masterVideoUrl;
-        } catch (loopErr: any) {
-          console.error("Master loop regeneration failed:", loopErr.message);
-          // Keep the old masterVideoUrl rather than nulling — better a stale
-          // loop than a broken chat screen.
+        await createMasterVideoJob(avatar);
+        if (avatar.didTalkId) {
+          await quickPollMasterVideo(avatar);
         }
-        avatar.status = "ready";
       }
 
       await avatar.save();
       return res.status(200).json({ success: true, data: { avatar } });
-    } catch (err) {
-      return res
-        .status(500)
-        .json({ success: false, message: "Visual anchor sync failed" });
+    } catch (err: any) {
+      console.error("[setHeroImage] Cloudinary upload failed:", err.message);
+      return res.status(500).json({
+        success: false,
+        message: "Visual anchor sync failed. Please try uploading again.",
+      });
     }
   };
 
-  /**
-   * SET MOUTH COORDS: Stores face-api.js mouth detection results.
-   *
-   * Called once by the frontend after the hero image is set. The client runs
-   * face-api.js locally (weights cached after first load) and posts the
-   * normalized mouth bounding box here. During chat, these coordinates
-   * position the audio-reactive mouth overlay in the ChatRoom.
-   *
-   * Coords are stored as PERCENTAGES (0-1) of the image dimensions so the
-   * overlay scales correctly regardless of the video's rendered size.
-   *
-   * Expected body: { x, y, width, height } — all in 0-1 range.
-   */
   setMouthCoords = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { x, y, width, height } = req.body;
 
-    console.log("[setMouthCoords] Incoming payload:", {
-      id,
-      x,
-      y,
-      width,
-      height,
-    });
-
-    // Validation — must be four numbers in 0-1 range
     if (
       typeof x !== "number" ||
       typeof y !== "number" ||
@@ -363,7 +536,6 @@ export class AvatarController {
       typeof height !== "number" ||
       [x, y, width, height].some((v) => v < 0 || v > 1)
     ) {
-      console.error("[setMouthCoords] Invalid payload rejected");
       return res.status(400).json({
         success: false,
         message: "Invalid mouth coordinates. Expected normalized values 0-1.",
@@ -371,31 +543,18 @@ export class AvatarController {
     }
 
     try {
-      const avatar = await Avatar.findOne({
-        _id: id,
-        userId: req.user?._id,
-      });
+      const avatar = await Avatar.findOne({ _id: id, userId: req.user?._id });
       if (!avatar) {
-        console.error("[setMouthCoords] Avatar not found:", id);
         return res
           .status(404)
           .json({ success: false, message: "Avatar not found" });
       }
 
-      // Assign and force Mongoose to mark this path as modified.
-      // Without markModified, nested-object assignments can silently
-      // fail to persist — a well-known Mongoose gotcha.
       avatar.mouthCoords = { x, y, width, height };
       avatar.markModified("mouthCoords");
-
       await avatar.save();
 
-      // Re-fetch to verify persistence and return canonical state
       const verified = await Avatar.findById(id).lean();
-      console.log(
-        "[setMouthCoords] Saved and verified. mouthCoords =",
-        verified?.mouthCoords,
-      );
 
       return res.status(200).json({
         success: true,
@@ -403,7 +562,6 @@ export class AvatarController {
         data: { avatar: verified },
       });
     } catch (err: any) {
-      console.error("[setMouthCoords] Save failed:", err.message);
       return res.status(500).json({
         success: false,
         message: "Failed to persist mouth coordinates",
@@ -412,16 +570,49 @@ export class AvatarController {
   };
 
   /**
-   * REMOVE ASSET: Purge specific media from the node gallery.
+   * RETRY MASTER VIDEO: Manually re-trigger generation after a failure.
+   * Same short-poll-then-handoff pattern as cloneVoice/setHeroImage.
    */
+  retryMasterVideo = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const avatar = await Avatar.findOne({ _id: id, userId: req.user?._id });
+    if (!avatar) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Avatar not found" });
+    }
+
+    if (!avatar.heroImageUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "Set a hero image before generating a video.",
+      });
+    }
+
+    await createMasterVideoJob(avatar);
+    if (avatar.didTalkId) {
+      await quickPollMasterVideo(avatar);
+    }
+    await avatar.save();
+
+    const message = avatar.masterVideoUrl
+      ? "AI video ready."
+      : avatar.status === "training"
+        ? "Still compiling AI video…"
+        : (avatar.masterVideoError ?? "Video generation failed.");
+
+    return res.status(200).json({ success: true, message, data: { avatar } });
+  };
+
   removeAsset = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { url, type } = req.body;
     const avatar = await Avatar.findOne({ _id: id, userId: req.user?._id });
-    if (!avatar)
+    if (!avatar) {
       return res
         .status(404)
         .json({ success: false, message: "Avatar not found" });
+    }
 
     if (type === "photo") {
       avatar.photoUrls = avatar.photoUrls.filter((p) => p !== url);
@@ -435,42 +626,6 @@ export class AvatarController {
     return res.status(200).json({ success: true, data: { avatar } });
   };
 
-  /**
-   * TEST SPEECH: Validate vocal signature with custom text.
-   */
-  // testSpeech = async (req: AuthRequest, res: Response) => {
-  //   const { voiceId, text } = req.body;
-  //   const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
-  //     .replace(/[`'"]/g, "")
-  //     .trim();
-
-  //   try {
-  //     const response = await axios.post(
-  //       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-  //       {
-  //         text: text || "Neural link active.",
-  //         model_id: "eleven_monolingual_v1",
-  //       },
-  //       {
-  //         headers: {
-  //           "xi-api-key": cleanApiKey,
-  //           "Content-Type": "application/json",
-  //           Accept: "audio/mpeg",
-  //         },
-  //         responseType: "arraybuffer",
-  //       },
-  //     );
-  //     res.set("Content-Type", "audio/mpeg");
-  //     return res.send(response.data);
-  //   } catch (e: any) {
-  //     return res
-  //       .status(500)
-  //       .json({ success: false, message: "Vocal frequency failure" });
-  //   }
-  // };
-  /**
-   * TEST SPEECH: Validate vocal signature with custom text.
-   */
   testSpeech = async (req: AuthRequest, res: Response) => {
     const { voiceId, text } = req.body;
 
@@ -487,9 +642,7 @@ export class AvatarController {
     try {
       const response = await axios.post(
         `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        {
-          text: text || "Neural link active.",
-        },
+        { text: text || "Neural link active." },
         {
           headers: {
             "xi-api-key": cleanApiKey,
@@ -513,9 +666,7 @@ export class AvatarController {
         .json({ success: false, message: "Vocal frequency failure" });
     }
   };
-  /**
-   * CLEAR ALL VOICES: Management utility to free up ElevenLabs slots.
-   */
+
   clearAllVoices = async (req: AuthRequest, res: Response) => {
     try {
       const cleanApiKey = (process.env.ELEVENLABS_API_KEY || "")
@@ -543,6 +694,76 @@ export class AvatarController {
       return res
         .status(500)
         .json({ success: false, message: "Cleanup operation failed" });
+    }
+  };
+
+  generateTestAvatar = async (req: AuthRequest, res: Response) => {
+    try {
+      const imageName = req.body.imageName || "elon.jpg";
+      const publicImagePath = path.join(
+        process.cwd(),
+        "public",
+        imageName.replace(/^\//, ""),
+      );
+
+      if (!fs.existsSync(publicImagePath)) {
+        return res.status(404).json({
+          success: false,
+          message: `Test image '${imageName}' not found in public directory: ${publicImagePath}`,
+        });
+      }
+
+      const uploadResult = await cloudinary.uploader.upload(publicImagePath, {
+        folder: "arklife/test-avatars",
+      });
+      const imageUrl = uploadResult.secure_url;
+
+      const drivingVideoUrl =
+        req.body.drivingVideoUrl ||
+        "https://replicate.delivery/pbxt/LEQxLFMUNZMiKt5PWjyMJIbTdvKAb5j3f0spuiEwt9TEbo8B/d0.mp4";
+
+      const output: any = await replicate.run(
+        "fofr/live-portrait:067dd98cc3e5cb396c4a9efb4bba3eec6c4a9d271211325c477518fc6485e146",
+        {
+          input: {
+            face_image: imageUrl,
+            driving_video: drivingVideoUrl,
+            live_portrait_dsize: 512,
+            live_portrait_scale: 2.3,
+            video_frame_load_cap: 128,
+            live_portrait_lip_zero: true,
+            live_portrait_relative: true,
+            live_portrait_vx_ratio: 0,
+            live_portrait_vy_ratio: -0.12,
+            live_portrait_stitching: true,
+            video_select_every_n_frames: 1,
+            live_portrait_eye_retargeting: false,
+            live_portrait_lip_retargeting: false,
+            live_portrait_lip_retargeting_multiplier: 1,
+            live_portrait_eyes_retargeting_multiplier: 1,
+          },
+        },
+      );
+
+      const videoUrl = Array.isArray(output)
+        ? typeof output[0]?.url === "function"
+          ? output[0].url()
+          : String(output[0])
+        : typeof output?.url === "function"
+          ? output.url()
+          : String(output);
+
+      return res.status(200).json({
+        success: true,
+        message: "LivePortrait avatar generated successfully via Replicate.",
+        data: { originalImage: imageUrl, generatedVideoUrl: videoUrl },
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        message: "Replicate avatar generation failed.",
+        error: err.message,
+      });
     }
   };
 }

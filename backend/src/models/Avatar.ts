@@ -13,24 +13,19 @@ export interface IAvatar extends Document {
     width: number;
     height: number;
   } | null;
-  /** The specific front-facing photo used by SadTalker for animation */
   heroImageUrl: string | null;
 
-  /** The pre-generated SadTalker lip-sync loop */
   masterVideoUrl: string | null;
 
-  /** Gallery for 3D depth reference (The 20 photos) */
   photoUrls: string[];
 
-  /** Voice samples for ElevenLabs cloning */
   voiceSampleUrls: string[];
 
-  /** Connection to the User's central Memory Vault (Knowledge Base) */
   memoryVaultId: mongoose.Types.ObjectId;
-
-  /** ElevenLabs voice_id; null until cloning is successful */
+  masterVideoError: string | null;
+  didTalkCreatedAt: Date | null;
   voiceId: string | null;
-
+  didTalkId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -50,10 +45,11 @@ const AvatarSchema: Schema = new Schema(
       enum: ["draft", "training", "ready"],
       default: "draft",
     },
-
-    // SadTalker Paths
-    heroImageUrl: { type: String, default: null },
+    didTalkId: { type: String, default: null },
     masterVideoUrl: { type: String, default: null },
+    masterVideoError: { type: String, default: null },
+    didTalkCreatedAt: { type: Date, default: null },
+    heroImageUrl: { type: String, default: null },
     mouthCoords: {
       type: {
         x: { type: Number },

@@ -57,6 +57,7 @@ const AvatarChatPage = () => {
 
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [videoBroken, setVideoBroken] = useState(false);
   const recognitionRef = useRef<any>(null);
   const interimTextRef = useRef("");
 
@@ -64,8 +65,8 @@ const AvatarChatPage = () => {
   const typeIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
 
-  /* ── Load avatar + history ─────────────────────────────────────── */
   useEffect(() => {
     const load = async () => {
       try {
@@ -81,9 +82,7 @@ const AvatarChatPage = () => {
             setCaption(lastAvatarMsg.text);
             setCaptionDone(true);
           }
-        } catch {
-          // History fetch failed — start with an empty conversation, don't block the page
-        }
+        } catch {}
       } catch (err) {
         setLoadError(true);
         toast.error("Could not load this twin. Returning to directory.");
@@ -100,6 +99,32 @@ const AvatarChatPage = () => {
     historyEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, rightOpen]);
 
+  /* ── Master video playback — driven purely by engineState, which is
+   * itself only ever set to "speaking" by the audio element's real
+   * `onplaying` event (see playCaptionWithAudio below), never by the
+   * TTS API call starting. The <video> element is ALWAYS mounted (see
+   * JSX) so the browser has already buffered it well before it's needed
+   * — this effect only play()/pause()s an element that's already loaded,
+   * which is instant, instead of mounting a fresh <video> each time
+   * (which was the cause of both the lag and the blank-screen flash).
+   * ────────────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const video = videoElRef.current;
+    if (!video || !avatar?.masterVideoUrl || videoBroken) return;
+
+    if (engineState === "speaking") {
+      video.currentTime = 0;
+      video.play().catch(() => {
+        // Autoplay could theoretically be blocked here too, but by this
+        // point the *audio* is already playing (user-gesture chain from
+        // Send/mic), so this is extremely unlikely. If it happens, the
+        // hero image underneath is still visible — no broken UI.
+      });
+    } else {
+      video.pause();
+    }
+  }, [engineState, avatar?.masterVideoUrl]);
+
   /* ── Cleanup on unmount ───────────────────────────────────────────── */
   useEffect(() => {
     return () => {
@@ -111,7 +136,11 @@ const AvatarChatPage = () => {
     };
   }, []);
 
-  /* ── Fallback: word-timer caption (no audio available) ──────────── */
+  /* ── Fallback: word-timer caption (no audio available) ──────────────
+   * No real audio exists in this path, so there's nothing to sync
+   * playback to — the video (if any) starts immediately alongside the
+   * typed caption rather than waiting on an event that will never fire.
+   */
   const playCaptionTimer = useCallback((text: string) => {
     if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
     setCaption("");
@@ -129,11 +158,19 @@ const AvatarChatPage = () => {
     }, 22);
   }, []);
 
-  /* ── Primary: audio playback with caption synced to playback time ──
+  /* ── Primary: audio playback with caption + video sync ──────────────
    * Uses the same testAvatarSpeech(voiceId, text) endpoint the Avatars
    * grid already uses for voice previews — the backend's chat.interact
    * route returns text + voiceId only, it does not synthesize audio
    * itself, so synthesis happens client-side via this call.
+   *
+   * engineState stays whatever it already was (set to "listening" by
+   * dispatchMessage) all the way through the network fetch and audio
+   * decode — it only flips to "speaking" on the browser's `onplaying`
+   * event, which fires once the audio is ACTUALLY producing sound, not
+   * when .play() is called or when this function starts. That's what
+   * keeps the master-video swap genuinely in sync with audible speech
+   * instead of firing early and sitting on a black/loading frame.
    */
   const playCaptionWithAudio = useCallback(
     async (text: string, voiceId?: string) => {
@@ -147,7 +184,6 @@ const AvatarChatPage = () => {
         return;
       }
 
-      setEngineState("speaking");
       const words = text.split(/\s+/).filter(Boolean);
 
       try {
@@ -155,6 +191,15 @@ const AvatarChatPage = () => {
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
         audioRef.current = audio;
+
+        audio.onplaying = () => {
+          // Fires only once real playback has begun (after any
+          // buffering) — this is the sole trigger for showing the
+          // master video and the "Speaking" state. It may fire more
+          // than once if playback stalls and resumes mid-clip; setting
+          // the same state again is a harmless no-op for React.
+          setEngineState("speaking");
+        };
 
         audio.ontimeupdate = () => {
           if (!audio.duration || isNaN(audio.duration)) return;
@@ -178,7 +223,8 @@ const AvatarChatPage = () => {
 
         await audio.play();
       } catch (err) {
-        // Synthesis failed (no credits, network, etc.) — still show the reply
+        // Synthesis or playback failed (no credits, network, autoplay
+        // block, etc.) — still show the reply via the timer fallback.
         setAudioFailed(true);
         playCaptionTimer(text);
       }
@@ -217,6 +263,9 @@ const AvatarChatPage = () => {
       setMessages((prev) => [...prev, avatarMsg]);
 
       if (replyText) {
+        // engineState stays "listening" (set above) through the entire
+        // TTS fetch inside playCaptionWithAudio — it only becomes
+        // "speaking" once audio.onplaying actually fires.
         playCaptionWithAudio(replyText, voiceId);
       } else {
         setEngineState("idle");
@@ -358,6 +407,13 @@ const AvatarChatPage = () => {
         ? "text-warning"
         : "text-foreground-subtle";
 
+  // Whether the (always-mounted, pre-buffered) video should be VISIBLE
+  // right now. The element itself never mounts/unmounts — only opacity
+  // and play/pause toggle, which is what removes both the lag and the
+  // blank-frame flash.
+  const showMasterVideo =
+    engineState === "speaking" && !!avatar.masterVideoUrl && !videoBroken;
+
   return (
     <div className="h-[90vh] w-full bg-background text-foreground flex overflow-hidden scrollbar-theme">
       {/* ── Left panel — avatar info — desktop static, mobile slide-over ── */}
@@ -434,7 +490,7 @@ const AvatarChatPage = () => {
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-2 py-2 md:px-4 md:py-3">
           <div className="relative w-full max-w-[min(58vh,24rem)] aspect-square rounded-2xl border border-border bg-surface overflow-hidden shrink-0">
             <div
-              className="absolute inset-0 rounded-2xl transition-shadow duration-500 pointer-events-none"
+              className="absolute inset-0 rounded-2xl transition-shadow duration-500 pointer-events-none z-20"
               style={{
                 boxShadow:
                   engineState === "speaking"
@@ -445,17 +501,17 @@ const AvatarChatPage = () => {
               }}
             />
 
+            {/* Still hero image — the permanent base layer. Its opacity
+                is the exact inverse of the video's, so the crossfade
+                below has no gap: there is never a frame where neither
+                (or both, oddly) is the visible one. */}
             {avatar.heroImageUrl ? (
               <motion.img
                 src={getAssetUrl(avatar.heroImageUrl)}
                 alt={avatar.name}
-                className="w-full h-full object-cover"
-                animate={{ scale: engineState === "speaking" ? 1.02 : 1 }}
-                transition={{
-                  duration: 1.2,
-                  repeat: engineState === "speaking" ? Infinity : 0,
-                  repeatType: "reverse",
-                }}
+                className="absolute inset-0 w-full h-full object-cover"
+                animate={{ opacity: showMasterVideo ? 0 : 1 }}
+                transition={{ duration: 0.15 }}
               />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-foreground-subtle">
@@ -464,7 +520,41 @@ const AvatarChatPage = () => {
               </div>
             )}
 
-            <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 bg-background/70 backdrop-blur-md border border-border px-2 py-0.5 rounded-full">
+            {/* Master video — ALWAYS mounted when masterVideoUrl exists,
+                regardless of speaking state. preload="auto" means the
+                browser buffers it in the background the moment the page
+                loads, so by the time engineState actually becomes
+                "speaking" (driven by audio.onplaying — real playback,
+                not the API call), play() is instant with nothing left to
+                fetch. Muted because the audible TTS audio is a separate
+                <audio> element; this clip is visual only. Play/pause is
+                handled by the useEffect above, not by mounting/unmounting
+                this element — that's what removes both the lag and the
+                blank-screen flash between messages. */}
+            {avatar.masterVideoUrl && (
+              <motion.video
+                ref={videoElRef}
+                src={avatar.masterVideoUrl}
+                className="absolute inset-0 w-full h-full object-cover"
+                animate={{ opacity: showMasterVideo ? 1 : 0 }}
+                transition={{ duration: 0.15 }}
+                loop
+                muted
+                playsInline
+                preload="auto"
+                onError={() => {
+                  // Clip failed to load (e.g. expired signed URL) — flip
+                  // videoBroken so showMasterVideo stays false and the
+                  // play/pause effect stops trying to use this element.
+                  // The hero image underneath is already the visible
+                  // layer whenever this isn't showing, so nothing else
+                  // breaks.
+                  setVideoBroken(true);
+                }}
+              />
+            )}
+
+            <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 bg-background/70 backdrop-blur-md border border-border px-2 py-0.5 rounded-full z-30">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   engineState === "speaking"
