@@ -9,9 +9,6 @@ if (!DID_API_KEY) {
   console.warn("[dIdService] DID_API_KEY is not set — D-ID calls will fail.");
 }
 
-// Isolated instance: does NOT inherit any axios.defaults mutations made
-// elsewhere in the process, and explicitly disables proxy usage so an
-// HTTP_PROXY/HTTPS_PROXY env var can't silently redirect this traffic.
 const didClient = axios.create({
   baseURL: DID_BASE_URL,
   proxy: false,
