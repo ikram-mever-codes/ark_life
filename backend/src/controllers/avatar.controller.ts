@@ -23,13 +23,6 @@ cloudinary.config({
 
 const VOICE_SAMPLES_REQUIRED = 1;
 
-/**
- * The D-ID master video is a single fixed idle-loop clip — it is NOT
- * regenerated per chat message. It plays muted in the chat UI while the
- * real reply audio comes from ElevenLabs separately, so this script's
- * WORDS are never heard — only the mouth movement they produce matters,
- * and only as a generic, natural-looking loop.
- */
 const IDLE_LOOP_SCRIPT_TEXT =
   "I'm here whenever you'd like to talk, so feel free to ask me anything on your mind.";
 
@@ -38,20 +31,6 @@ const DID_PROVIDER = {
   voice_id: "en-US-JennyNeural",
 } as const;
 
-/**
- * PLATFORM CONSTRAINT: this backend runs behind AWS API Gateway, which
- * enforces a hard 29-second timeout on every request — not configurable,
- * not raisable, independent of the Lambda's own timeout setting. A
- * request that hasn't responded by 29s is killed outright (client sees
- * no status/response at all, and Lambda may be reinvoked).
- *
- * D-ID's own docs state /talks typically resolves in 10-30s, and we've
- * observed jobs finishing in ~5s in practice. But cloneVoice ALSO calls
- * ElevenLabs first, which has already consumed several seconds of the
- * 29s budget by the time D-ID generation starts. So the in-request poll
- * here must be short and conservative — long enough to catch the common
- * fast case, short enough to always leave room to respond before 29s.
- */
 const DID_QUICK_POLL_INTERVAL_MS = 2500;
 const DID_QUICK_POLL_MAX_ATTEMPTS = 6; // ~15s worst case
 
