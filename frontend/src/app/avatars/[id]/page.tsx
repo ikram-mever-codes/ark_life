@@ -12,7 +12,13 @@ import {
   setAvatarMouthCoords,
   Avatar,
 } from "@/api/avatars";
-import { getVault, addMemory, deleteMemoryFile, VaultData } from "@/api/memory";
+import {
+  getVault,
+  addMemory,
+  deleteMemoryFile,
+  retryMemoryFile,
+  VaultData,
+} from "@/api/memory";
 import {
   Upload,
   Mic,
@@ -319,52 +325,41 @@ const AvatarLab = () => {
     const uploadToast = toast.loading(`Uploading ${file.name}...`);
 
     try {
-      await addMemory({ file, avatarId: id as string });
-      toast.loading(`Indexing ${file.name}...`, { id: uploadToast });
+      const res = await addMemory({
+        file,
+        avatarId: id as string,
+        category: "personal",
+      });
+      const fileId: string | undefined = res?.fileId;
+      toast.loading(`Reading ${file.name}...`, { id: uploadToast });
 
-      const MAX_POLLS = 30;
-      const POLL_INTERVAL = 2000;
-      let pollCount = 0;
-      let indexingComplete = false;
-
-      while (pollCount < MAX_POLLS && !indexingComplete) {
+      // Poll the processing status (Processing → OCR → Indexed | Failed).
+      // The backend guarantees a final state, so we just wait for it.
+      const POLL_INTERVAL = 2500;
+      const MAX_WAIT_MS = 11 * 60_000;
+      const started = Date.now();
+      while (Date.now() - started < MAX_WAIT_MS) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-        pollCount++;
-
         const vaultData = await getVault();
         setVault(vaultData);
-
-        const uploaded = [...(vaultData?.files || [])]
-          .reverse()
-          .find((f: any) => f.fileName === file.name);
-
-        if (!uploaded) continue;
-
-        if ((uploaded as any).indexError) {
-          toast.error(`Indexing failed: ${(uploaded as any).indexError}`, {
-            id: uploadToast,
-            duration: 6000,
-          });
-          indexingComplete = true;
-          break;
-        }
-
-        if (uploaded.isIndexed) {
-          toast.success(`${file.name} indexed successfully`, {
+        const uploaded = vaultData?.files.find((f) => f._id === fileId);
+        if (!uploaded) break;
+        if (uploaded.status === "ocr_processing") {
+          toast.loading(`Scanned document — running OCR on ${file.name}...`, {
             id: uploadToast,
           });
-          indexingComplete = true;
+        }
+        if (uploaded.status === "failed") {
+          toast.error(`Could not read ${file.name}: ${uploaded.indexError}`, {
+            id: uploadToast,
+            duration: 7000,
+          });
           break;
         }
-      }
-
-      if (!indexingComplete) {
-        toast.error(
-          `Indexing is taking unusually long. Check backend terminal for errors.`,
-          { id: uploadToast, duration: 8000 },
-        );
-        const finalVault = await getVault();
-        setVault(finalVault);
+        if (uploaded.status === "indexed") {
+          toast.success(`${file.name} learned`, { id: uploadToast });
+          break;
+        }
       }
     } catch (err: any) {
       console.error("[handleMemoryUpload] Failed:", err);
@@ -410,7 +405,11 @@ const AvatarLab = () => {
       const blob = new Blob([fullText], { type: "text/plain" });
       const noteFile = new File([blob], safeTitle, { type: "text/plain" });
 
-      await addMemory({ file: noteFile, avatarId: id as string });
+      await addMemory({
+        file: noteFile,
+        avatarId: id as string,
+        category: "personal",
+      });
 
       const fresh = await getVault();
       setVault(fresh);
@@ -931,7 +930,12 @@ const AvatarLab = () => {
                     </thead>
                     <tbody className="divide-y divide-divider">
                       {vault?.files
-                        .filter((f: any) => f.avatarId === id || !f.avatarId)
+                        // Clinical documents live in the Clinical area (/clinical).
+                        .filter(
+                          (f: any) =>
+                            f.category !== "clinical" &&
+                            (f.avatarId === id || !f.avatarId),
+                        )
                         .map((file: any) => (
                           <tr
                             key={file._id}
@@ -949,13 +953,34 @@ const AvatarLab = () => {
                               </div>
                             </td>
                             <td className="px-8 py-5 text-xs">
-                              {file.isIndexed ? (
+                              {file.status === "indexed" ? (
                                 <span className="text-primary flex items-center gap-1">
                                   <CheckCircle size={14} /> Learned
                                 </span>
+                              ) : file.status === "failed" ? (
+                                <span className="flex items-center gap-2">
+                                  <span
+                                    className="text-error"
+                                    title={file.indexError || ""}
+                                  >
+                                    Failed
+                                  </span>
+                                  <button
+                                    onClick={() =>
+                                      retryMemoryFile(file._id).then(
+                                        loadInitialData,
+                                      )
+                                    }
+                                    className="underline text-foreground-muted hover:text-primary"
+                                  >
+                                    Retry
+                                  </button>
+                                </span>
                               ) : (
                                 <span className="text-warning animate-pulse">
-                                  Reading...
+                                  {file.status === "ocr_processing"
+                                    ? "OCR..."
+                                    : "Reading..."}
                                 </span>
                               )}
                             </td>

@@ -1,6 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { markdownToSpeech } from "@/utils/util";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -57,6 +60,14 @@ const AvatarChatPage = () => {
 
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
+  // Voice input language (Italian by default — ArkLife users are mostly Italian).
+  const [speechLang, setSpeechLang] = useState<"it-IT" | "en-US">("it-IT");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("arklife_voice_lang");
+      if (saved === "it-IT" || saved === "en-US") setSpeechLang(saved);
+    } catch {}
+  }, []);
   const [videoBroken, setVideoBroken] = useState(false);
   const recognitionRef = useRef<any>(null);
   const interimTextRef = useRef("");
@@ -259,6 +270,7 @@ const AvatarChatPage = () => {
         role: "avatar",
         text: replyText,
         createdAt: new Date().toISOString(),
+        sources: res?.data?.sources ?? [],
       };
       setMessages((prev) => [...prev, avatarMsg]);
 
@@ -266,7 +278,7 @@ const AvatarChatPage = () => {
         // engineState stays "listening" (set above) through the entire
         // TTS fetch inside playCaptionWithAudio — it only becomes
         // "speaking" once audio.onplaying actually fires.
-        playCaptionWithAudio(replyText, voiceId);
+        playCaptionWithAudio(markdownToSpeech(replyText), voiceId);
       } else {
         setEngineState("idle");
       }
@@ -304,7 +316,7 @@ const AvatarChatPage = () => {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = "en-US";
+    recognition.lang = speechLang;
 
     recognition.onresult = (event: any) => {
       let interim = "";
@@ -333,7 +345,7 @@ const AvatarChatPage = () => {
     return () => {
       recognition.stop();
     };
-  }, []);
+  }, [speechLang]);
 
   const toggleListening = () => {
     if (!speechSupported) {
@@ -616,6 +628,20 @@ const AvatarChatPage = () => {
               }
             >
               {isListening ? <MicOff size={17} /> : <Mic size={17} />}
+            </button>
+            <button
+              onClick={() => {
+                const next = speechLang === "it-IT" ? "en-US" : "it-IT";
+                setSpeechLang(next);
+                try {
+                  localStorage.setItem("arklife_voice_lang", next);
+                } catch {}
+              }}
+              disabled={isListening}
+              className="shrink-0 h-10 px-2 rounded-lg border border-border text-[11px] font-semibold text-foreground-muted hover:text-primary hover:border-primary/40 disabled:opacity-40"
+              title="Voice input language"
+            >
+              {speechLang === "it-IT" ? "IT" : "EN"}
             </button>
 
             <input
@@ -1056,7 +1082,20 @@ const MessageBubble = ({ message }: { message: ChatMessage }) => {
             : "bg-surface-elevated border border-border text-foreground rounded-bl-sm"
         }`}
       >
-        {message.text}
+        {isUser ? (
+          <div className="whitespace-pre-wrap">{message.text}</div>
+        ) : (
+          <div className="chat-md">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.text}
+            </ReactMarkdown>
+          </div>
+        )}
+        {!isUser && message.sources && message.sources.length > 0 && (
+          <div className="mt-1.5 pt-1.5 border-t border-border/60 text-[10px] text-foreground-muted">
+            📄 {message.sources.map((s) => s.fileName).join(" · ")}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -7,6 +7,14 @@ import { clearTokens } from "@/components/AuthProvider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
+// The three product areas (Clinical / Avatar / Biometric) are kept separate.
+const NAV_ITEMS = [
+  { label: "Dashboard", href: "/dashboard" },
+  { label: "Clinical", href: "/clinical" },
+  { label: "Avatars", href: "/avatars" },
+  { label: "Settings", href: "/settings" },
+];
+
 const Header: React.FC = () => {
   const { user } = useSelector((state: RootState) => state.user);
   const dispatch = useDispatch<AppDispatch>();
@@ -51,13 +59,13 @@ const Header: React.FC = () => {
 
         {user && (
           <nav className="hidden md:flex items-center gap-6">
-            {["Dashboard", "Avatars", "Settings"].map((item) => (
+            {NAV_ITEMS.map((item) => (
               <Link
-                key={item}
-                href={`/${item.toLowerCase()}`}
+                key={item.href}
+                href={item.href}
                 className="text-sm font-medium text-foreground-muted hover:text-primary transition-colors"
               >
-                {item}
+                {item.label}
               </Link>
             ))}
           </nav>
@@ -112,6 +120,18 @@ const Header: React.FC = () => {
                     <p className="text-xs text-foreground-subtle truncate">
                       {user.email}
                     </p>
+                  </div>
+                  {/* Main navigation on mobile (desktop nav is hidden < md) */}
+                  <div className="md:hidden border-b border-border mb-1 pb-1">
+                    {NAV_ITEMS.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className="block px-4 py-2 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                      >
+                        {item.label}
+                      </Link>
+                    ))}
                   </div>
                   <Link
                     href="/settings"

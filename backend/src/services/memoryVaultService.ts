@@ -23,7 +23,7 @@ const CHUNK_OVERLAP = 100;
  * No embedding generation. No OpenAI calls. No vector indexing.
  * This is the bypass that eliminates the RAG pipeline's failure modes.
  */
-async function storeChunksAsText(
+export async function storeChunksAsText(
   userId: mongoose.Types.ObjectId,
   vaultId: mongoose.Types.ObjectId,
   source: "file" | "neuralBio",

@@ -13,11 +13,12 @@ import path from "node:path";
 import mammoth from "mammoth";
 
 const TEXT_EXTENSIONS = new Set(["txt", "md", "json", "pdf", "docx"]);
+// Images are handled by the OCR pipeline (documentProcessingService), not here.
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav"]);
 const MAX_EXTRACTED_TEXT_BYTES = 500 * 1024;
 
 export type ExtractResult =
-  | { text: string; ok: true }
+  | { text: string; ok: true; pageCount?: number }
   | { text?: string; ok: false; error: string };
 
 let pdfjsPromise: Promise<any> | null = null;
@@ -111,7 +112,7 @@ async function extractPdfText(filePath: string): Promise<ExtractResult> {
       }
     }
 
-    return { ok: true, text: assembledText.trim() };
+    return { ok: true, text: assembledText.trim(), pageCount: numPages };
   } finally {
     try {
       await doc.destroy();

@@ -1,11 +1,5 @@
+import "./config/env";
 import path from "node:path";
-import dotenv from "dotenv";
-
-// Load env
-dotenv.config({
-  path: path.resolve(__dirname, "../env/.env"),
-});
-
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -16,6 +10,8 @@ import memoryRoutes from "./routes/memory.routes";
 import avatarRoutes from "./routes/avatar.routes";
 import chatRoutes from "./routes/chat.routes";
 const app = express();
+// Behind nginx on the VPS: needed for correct client IPs (rate limiting).
+app.set("trust proxy", 1);
 
 connectDB();
 
@@ -29,8 +25,14 @@ app.use(
 
 app.use(
   cors({
-    origin: ["https://app.arklifeproject.com", "http://localhost:3000"],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    origin: (
+      process.env.CORS_ORIGINS ||
+      "https://app.arklifeproject.com,http://localhost:3000"
+    )
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean),
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   }),
@@ -42,8 +44,13 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // --- STATIC FOLDER ACCESS ---
-// This serves everything in the 'backend/uploads' folder at the '/uploads' URL path
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+// Only avatar media (master video, avatar photos) is public. User documents
+// in uploads/memory contain health data and are served exclusively through
+// the authenticated route GET /api/v1/memory/files/:fileId/content.
+app.use(
+  "/uploads/avatars",
+  express.static(path.join(__dirname, "../uploads/avatars")),
+);
 
 // Health check and Welcome routes...
 app.get("/api/health", (req: Request, res: Response) => {

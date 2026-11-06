@@ -11,7 +11,7 @@ export const checkPlanAccess = (action: "createAvatar" | "sendMessage") => {
     const plan = SUBSCRIPTION_PLANS[user.subscriptionTier];
 
     if (action === "createAvatar") {
-      if (user.useage.avatarCount >= plan.maxAvatars) {
+      if (user.usage.avatarCount >= plan.maxAvatars) {
         return res.status(403).json({
           message: `Upgrade to Pro to create more than ${plan.maxAvatars} avatar.`,
         });
@@ -20,7 +20,7 @@ export const checkPlanAccess = (action: "createAvatar" | "sendMessage") => {
 
     if (action === "sendMessage") {
       // Check message limits
-      if (user.useage.monthlyMessageCount >= plan.monthlyMessages) {
+      if (user.usage.monthlyMessageCount >= plan.monthlyMessages) {
         return res
           .status(403)
           .json({ message: "Monthly message limit reached." });

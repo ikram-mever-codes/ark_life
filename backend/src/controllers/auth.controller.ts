@@ -19,7 +19,6 @@ import axios from "axios";
 export class AuthController {
   // Register new user
   register = async (req: Request, res: Response) => {
-    console.log("jsonBody: ", req.body);
 
     const email = req.body.email?.trim();
     const password = req.body.password?.trim();
@@ -821,6 +820,14 @@ export class AuthController {
     try {
       const userId = (req as any).user._id;
       const { tier } = req.body;
+
+      // Until real payments exist, users must not upgrade themselves.
+      if (process.env.ALLOW_SELF_SUBSCRIPTION_CHANGE !== "true") {
+        return res.status(403).json({
+          success: false,
+          message: "Subscription changes are managed by the ArkLife team.",
+        });
+      }
 
       if (!["free", "pro", "business"].includes(tier)) {
         return res

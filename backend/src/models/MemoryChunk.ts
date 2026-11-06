@@ -9,6 +9,7 @@ export interface IMemoryChunk extends Document {
   avatarId: string;
   source: "neuralBio" | "file";
   fileId?: mongoose.Types.ObjectId;
+  chunkIndex?: number;
   text: string;
   embedding: number[];
   createdAt: Date;
@@ -42,7 +43,9 @@ const MemoryChunkSchema: Schema = new Schema(
       enum: ["neuralBio", "file"],
       required: true,
     },
-    fileId: { type: Schema.Types.ObjectId },
+    fileId: { type: Schema.Types.ObjectId, index: true },
+    /** Position of the chunk inside its source document (for re-assembly). */
+    chunkIndex: { type: Number, default: 0 },
     text: { type: String, required: true },
     embedding: {
       type: [Number],

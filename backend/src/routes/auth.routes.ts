@@ -2,20 +2,33 @@
 import { Router } from "express";
 import authController, { AuthController } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth";
+import rateLimit from "express-rate-limit";
+
+// Brute-force protection for login / OTP / password reset.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many attempts. Please try again in 15 minutes.",
+  },
+});
 
 const router: any = Router();
 
 // Public routes
-router.post("/register", authController.register);
-router.post("/login", authController.login);
+router.post("/register", authLimiter, authController.register);
+router.post("/login", authLimiter, authController.login);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout);
 router.get("/verify-email", authController.verifyEmail);
-router.post("/resend-verification", authController.resendVerification);
-router.post("/verify-otp", authController.verifyOtp);
-router.post("/resend-otp", authController.resendOtp);
-router.post("/forgot-password", authController.forgotPasswordOTP);
-router.post("/reset-password", authController.resetPassword);
+router.post("/resend-verification", authLimiter, authController.resendVerification);
+router.post("/verify-otp", authLimiter, authController.verifyOtp);
+router.post("/resend-otp", authLimiter, authController.resendOtp);
+router.post("/forgot-password", authLimiter, authController.forgotPasswordOTP);
+router.post("/reset-password", authLimiter, authController.resetPassword);
 router.post("/onboard", authenticate, authController.onboardUser);
 // Protected routes
 router.get("/profile", authenticate, authController.getProfile);

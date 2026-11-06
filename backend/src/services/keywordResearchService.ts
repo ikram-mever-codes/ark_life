@@ -126,6 +126,14 @@ const STOPWORDS = new Set([
   "then",
   "now",
   "also",
+  // Italian (users are mostly Italian)
+  "il", "lo", "la", "le", "gli", "un", "uno", "una", "di", "da", "del",
+  "della", "dei", "delle", "nel", "nella", "per", "con", "su", "tra", "fra",
+  "che", "chi", "cosa", "come", "quando", "dove", "perché", "perche", "non",
+  "si", "sono", "sei", "è", "e", "ed", "ho", "hai", "ha", "mi", "ti", "ci",
+  "vi", "mio", "mia", "miei", "mie", "tuo", "tua", "questo", "questa",
+  "quello", "quella", "anche", "ma", "più", "piu", "molto", "al", "allo",
+  "alla", "ai", "agli", "alle", "dal", "dalla", "sul", "sulla", "o",
 ]);
 
 /**
@@ -136,7 +144,8 @@ function tokenize(text: string): string[] {
   if (!text) return [];
   return text
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ") // strip punctuation
+    .normalize("NFC")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ") // strip punctuation, keep accented letters
     .split(/\s+/)
     .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
 }
@@ -224,7 +233,9 @@ export async function findTopChunksByKeyword(
   query: string,
   avatarId?: string,
   topK: number = 3,
-): Promise<Array<{ text: string; score: number; source?: string }>> {
+): Promise<
+  Array<{ text: string; score: number; source?: string; fileId?: string }>
+> {
   const queryTerms = tokenize(query);
   if (queryTerms.length === 0) {
     console.log("[KeywordSearch] Query tokenized to nothing, skipping");
@@ -247,6 +258,7 @@ export async function findTopChunksByKeyword(
   const chunks = await MemoryChunk.find(mongoQuery, {
     text: 1,
     source: 1,
+    fileId: 1,
     _id: 0,
   }).lean();
 
@@ -269,6 +281,7 @@ export async function findTopChunksByKeyword(
     .map((chunk: any) => ({
       text: chunk.text,
       source: chunk.source,
+      fileId: chunk.fileId ? String(chunk.fileId) : undefined,
       score: scoreChunk(chunk.text, queryTerms, chunks.length, docFreq),
     }))
     .filter((c) => c.score > 0)

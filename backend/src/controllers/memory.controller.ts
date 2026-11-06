@@ -1,87 +1,72 @@
 // ═══════════════════════════════════════════════════════════════════════
-// controllers/memory.controller.ts — DEBUG + SYNCHRONOUS INDEXING
+// controllers/memory.controller.ts — Documents & memory (Milestone 3)
 // ═══════════════════════════════════════════════════════════════════════
-// Critical changes:
-//   1. Removed setImmediate — indexing runs INLINE during the request
-//      so errors actually surface and the response only returns after
-//      indexing is complete (or failed with a clear reason)
-//   2. Heavy logging at every boundary so we can see exactly what runs
-//   3. Response includes an `indexResult` field so the frontend immediately
-//      knows whether indexing succeeded, without polling
+//
+// Uploads return immediately with status "processing"; the document pipeline
+// (services/documentProcessingService.ts) runs in the background and moves
+// each file to "indexed" or "failed". The frontend polls GET /vault.
 
 import { Response } from "express";
 import path from "node:path";
+import fs from "node:fs";
 import { AuthRequest } from "../middleware/auth";
 import MemoryVault from "../models/MemoryVault";
-import { findTopChunksByKeyword } from "../services/keywordResearchService";
-import { indexFile, indexNeuralBio } from "../services/memoryVaultService";
-import Avatar from "../models/Avatar";
 import MemoryChunk from "../models/MemoryChunk";
-import fs from "fs";
+import Avatar from "../models/Avatar";
+import { findTopChunksByKeyword } from "../services/keywordResearchService";
+import { indexNeuralBio } from "../services/memoryVaultService";
+import {
+  effectiveStatus,
+  enqueueDocument,
+} from "../services/documentProcessingService";
+import { UPLOAD_BASE } from "../config/multer";
 
-const MAX_INDEXABLE_FILE_BYTES = 5 * 1024 * 1024; // 5MB
-const INDEXING_TIMEOUT_MS = 30_000; // 30 seconds — shorter since it's synchronous
-
-const withTimeout = <T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> => {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`[${label}] timed out after ${ms}ms`)),
-        ms,
-      ),
-    ),
-  ]);
+const CONTENT_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  txt: "text/plain; charset=utf-8",
+  md: "text/markdown; charset=utf-8",
+  json: "application/json; charset=utf-8",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  jpg: "image/jpeg",
+  png: "image/png",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
 };
 
-const markFileIndexError = async (
-  vaultId: any,
-  fileId: any,
-  errMessage: string,
-) => {
-  try {
-    await MemoryVault.updateOne(
-      { _id: vaultId, "files._id": fileId },
-      {
-        $set: {
-          "files.$.isIndexed": false,
-          "files.$.indexError": String(errMessage).slice(0, 500),
-        },
-      },
-    );
-  } catch (e) {
-    console.error("[Memory] Could not mark file index error:", e);
+async function getOrCreateVault(userId: any) {
+  let vault = await MemoryVault.findOne({ userId });
+  if (!vault) {
+    vault = await MemoryVault.create({
+      userId,
+      files: [],
+      vectorConfig: { indexName: "vector_index", isIndexed: false },
+      encryption: { algorithm: "AES-256-GCM", isQuantumReady: false },
+    });
   }
-};
+  return vault;
+}
 
-const markFileIndexed = async (vaultId: any, fileId: any) => {
-  try {
-    await MemoryVault.updateOne(
-      { _id: vaultId, "files._id": fileId },
-      {
-        $set: {
-          "files.$.isIndexed": true,
-          "files.$.indexError": null,
-          "vectorConfig.isIndexed": true,
-          "vectorConfig.lastIndexedAt": new Date(),
-        },
-      },
-    );
-  } catch (e) {
-    console.error("[Memory] Could not mark file as indexed:", e);
-  }
-};
+/** Remove server paths before sending the vault to the browser. */
+function toClientVault(vault: any) {
+  if (!vault) return vault;
+  const v = typeof vault.toObject === "function" ? vault.toObject() : vault;
+  return {
+    ...v,
+    files: (v.files || []).map((f: any) => {
+      const { localPath, ...rest } = f;
+      return {
+        ...rest,
+        status: effectiveStatus(f),
+        category: f.category || "personal",
+        source: f.source || "upload",
+      };
+    }),
+  };
+}
 
 export class MemoryController {
   /** POST /add-memory — file upload and/or neuralBio */
   addMemory = async (req: AuthRequest, res: Response) => {
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("[addMemory] Request received");
-
     const userId = req.user?._id;
     if (!userId) {
       return res
@@ -90,65 +75,39 @@ export class MemoryController {
     }
 
     const { neuralBio, avatarId } = req.body;
-    console.log("[addMemory] userId:", userId);
-    console.log("[addMemory] avatarId:", avatarId);
-    console.log("[addMemory] has file:", !!(req as any).file);
-    console.log("[addMemory] has neuralBio:", neuralBio !== undefined);
+    const category = req.body.category === "clinical" ? "clinical" : "personal";
+    const source = req.body.source === "fse" ? "fse" : "upload";
 
-    let vault = await MemoryVault.findOne({ userId });
-    if (!vault) {
-      vault = await MemoryVault.create({
-        userId,
-        files: [],
-        vectorConfig: { indexName: "vector_index", isIndexed: false },
-        encryption: { algorithm: "AES-256-GCM", isQuantumReady: false },
-      });
+    // An avatarId must belong to the current user.
+    if (avatarId) {
+      const owns = await Avatar.exists({ _id: avatarId, userId });
+      if (!owns) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Avatar not found" });
+      }
     }
 
+    const vault = await getOrCreateVault(userId);
     const added: string[] = [];
-    let indexResult: { ok: boolean; error?: string } | null = null;
 
-    // ─── Neural Bio (text) — still run in background since it's fast ───
+    // ─── Neural Bio (short text, indexed inline) ───
     if (neuralBio !== undefined) {
-      const bio = (neuralBio || "").trim();
+      const bio = String(neuralBio || "").trim();
       vault.neuralBio = bio || undefined;
       await vault.save();
-
       if (bio) {
         added.push("neuralBio");
-        try {
-          console.log("[addMemory] Indexing neural bio inline...");
-          await withTimeout(
-            indexNeuralBio(vault._id, userId, bio, avatarId),
-            INDEXING_TIMEOUT_MS,
-            "indexNeuralBio",
-          );
-          console.log("[addMemory] Bio indexed ✓");
-        } catch (e: any) {
-          console.error("[addMemory] Bio index error:", e.message);
-        }
+        const r = await indexNeuralBio(vault._id as any, userId, bio, avatarId);
+        if (!r.ok) console.error("[addMemory] Bio index error:", r.error);
       }
     }
 
-    // ─── File Upload — INLINE indexing with full error visibility ───
-    if ((req as any).file) {
-      const file = (req as any).file as Express.Multer.File;
-      const ext =
-        path.extname(file.originalname).slice(1).toLowerCase() || "txt";
-
-      let fileSize = 0;
-      try {
-        fileSize = fs.statSync(file.path).size;
-      } catch {
-        fileSize = 0;
-      }
-
-      console.log(
-        `[addMemory] File: ${file.originalname} (${fileSize} bytes, type=${ext})`,
-      );
-      console.log(`[addMemory] File path: ${file.path}`);
-
-      const isTooLarge = fileSize > MAX_INDEXABLE_FILE_BYTES;
+    // ─── File upload → background pipeline ───
+    let fileId: string | null = null;
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (file) {
+      const ext = path.extname(file.filename).slice(1).toLowerCase() || "txt";
 
       vault.files.push({
         fileName: file.originalname,
@@ -156,64 +115,21 @@ export class MemoryController {
         localPath: file.path,
         uploadDate: new Date(),
         isIndexed: false,
-        avatarId: avatarId || null,
+        status: "processing",
+        indexError: null,
+        sizeBytes: file.size,
+        mimeType: file.mimetype,
+        // Clinical documents are user-wide; personal memories can be avatar-scoped.
+        avatarId: category === "clinical" ? null : avatarId || null,
+        category,
+        source,
       } as any);
-
       await vault.save();
-      const fileEntry = vault.files[vault.files.length - 1];
-      added.push(`file:${fileEntry.fileName}`);
 
-      if (isTooLarge) {
-        const msg = `File exceeds ${MAX_INDEXABLE_FILE_BYTES / 1024 / 1024}MB indexing limit`;
-        console.warn(`[addMemory] ${msg}`);
-        await markFileIndexError(vault._id, fileEntry._id, msg);
-        indexResult = { ok: false, error: msg };
-      } else if (fileEntry._id) {
-        // ═══ INLINE INDEXING ═══
-        // Run synchronously inside the request so errors surface as
-        // real 500s / response fields, not silent background failures.
-        console.log(
-          `[addMemory] >>> Starting inline indexing for ${fileEntry.fileName}`,
-        );
-        const startTime = Date.now();
-        const startHeap = process.memoryUsage().heapUsed / 1024 / 1024;
-
-        try {
-          const r = await withTimeout(
-            indexFile(
-              vault._id,
-              userId,
-              fileEntry._id!,
-              file.path,
-              ext,
-              avatarId,
-            ),
-            INDEXING_TIMEOUT_MS,
-            "indexFile",
-          );
-
-          if (r?.ok) {
-            await markFileIndexed(vault._id, fileEntry._id);
-            const endHeap = process.memoryUsage().heapUsed / 1024 / 1024;
-            const elapsed = Date.now() - startTime;
-            console.log(
-              `[addMemory] <<< Indexed ${fileEntry.fileName} in ${elapsed}ms. Heap: ${startHeap.toFixed(0)}MB → ${endHeap.toFixed(0)}MB`,
-            );
-            indexResult = { ok: true };
-          } else {
-            const msg = (r as any)?.error || "Indexer returned ok=false";
-            console.error(`[addMemory] Indexer failed: ${msg}`);
-            await markFileIndexError(vault._id, fileEntry._id, msg);
-            indexResult = { ok: false, error: msg };
-          }
-        } catch (e: any) {
-          const msg = e?.message || "Unknown indexing error";
-          console.error(`[addMemory] Index exception: ${msg}`);
-          console.error(e?.stack);
-          await markFileIndexError(vault._id, fileEntry._id, msg);
-          indexResult = { ok: false, error: msg };
-        }
-      }
+      const entry = vault.files[vault.files.length - 1];
+      fileId = String(entry._id);
+      added.push(`file:${entry.fileName}`);
+      enqueueDocument(String(vault._id), fileId);
     }
 
     // Link user's avatars to this vault
@@ -222,24 +138,136 @@ export class MemoryController {
       { $set: { memoryVaultId: vault._id } },
     );
 
-    // Return fresh vault so frontend sees the latest state
     const freshVault = await MemoryVault.findById(vault._id).lean();
-    console.log("[addMemory] Response ready, indexResult:", indexResult);
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
     return res.status(201).json({
       success: true,
-      message: indexResult?.ok
-        ? "Memory added and indexed successfully"
-        : indexResult
-          ? `Memory added but indexing failed: ${indexResult.error}`
-          : "Memory added.",
+      message: file
+        ? "Document uploaded. Processing has started."
+        : "Memory saved.",
+      data: { vault: toClientVault(freshVault), added, fileId },
+    });
+  };
+
+  /** GET /files/:fileId/content — authenticated file stream for the viewer */
+  getFileContent = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?._id;
+    const vault = await MemoryVault.findOne({ userId });
+    const file = vault?.files.find((f) => String(f._id) === req.params.fileId);
+    if (!file || !file.localPath) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Document not found" });
+    }
+
+    // Path traversal guard: the file must live inside the uploads directory.
+    const resolved = path.resolve(file.localPath);
+    if (!resolved.startsWith(path.resolve(UPLOAD_BASE))) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+    if (!fs.existsSync(resolved)) {
+      return res
+        .status(404)
+        .json({ success: false, message: "File missing on server" });
+    }
+
+    const type = String(file.fileType).toLowerCase();
+    res.setHeader(
+      "Content-Type",
+      CONTENT_TYPES[type] || "application/octet-stream",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${encodeURIComponent(file.fileName)}"`,
+    );
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    fs.createReadStream(resolved).pipe(res);
+  };
+
+  /** GET /files/:fileId/text — extracted (indexed) text, e.g. for DOCX/OCR preview */
+  getFileText = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?._id;
+    const vault = await MemoryVault.findOne({ userId }, { files: 1 }).lean();
+    const file = (vault?.files as any[])?.find(
+      (f) => String(f._id) === req.params.fileId,
+    );
+    if (!file) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Document not found" });
+    }
+    const chunks = await MemoryChunk.find(
+      { userId, fileId: file._id },
+      { text: 1, chunkIndex: 1 },
+    )
+      .sort({ chunkIndex: 1, _id: 1 })
+      .lean();
+    return res.status(200).json({
+      success: true,
       data: {
-        vault: freshVault,
-        added,
-        indexResult,
+        fileId: String(file._id),
+        ocrUsed: !!file.ocrUsed,
+        text: chunks.map((c: any) => c.text).join("\n"),
       },
     });
+  };
+
+  /** POST /files/:fileId/retry — re-run processing for a failed document */
+  retryFile = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?._id;
+    const vault = await MemoryVault.findOne({ userId });
+    const file = vault?.files.find((f) => String(f._id) === req.params.fileId);
+    if (!vault || !file) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Document not found" });
+    }
+
+    await MemoryVault.updateOne(
+      { _id: vault._id, "files._id": file._id },
+      {
+        $set: {
+          "files.$.status": "processing",
+          "files.$.indexError": null,
+          "files.$.isIndexed": false,
+        },
+      },
+    );
+    enqueueDocument(String(vault._id), String(file._id));
+    return res
+      .status(202)
+      .json({ success: true, message: "Processing restarted" });
+  };
+
+  /** PATCH /files/:fileId — change category (e.g. move an old upload to Clinical) */
+  updateFile = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?._id;
+    const category = req.body?.category;
+    if (category !== "clinical" && category !== "personal") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid category" });
+    }
+    const $set: Record<string, unknown> = { "files.$.category": category };
+    // Clinical documents are user-wide (not tied to one avatar).
+    if (category === "clinical") $set["files.$.avatarId"] = null;
+
+    const r = await MemoryVault.updateOne(
+      { userId, "files._id": req.params.fileId },
+      { $set },
+    );
+    if (!r.matchedCount) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Document not found" });
+    }
+    if (category === "clinical") {
+      await MemoryChunk.updateMany(
+        { userId, fileId: req.params.fileId },
+        { $set: { avatarId: null } },
+      );
+    }
+    return res.status(200).json({ success: true, message: "Document updated" });
   };
 
   /** DELETE /files/:fileId */
@@ -270,27 +298,23 @@ export class MemoryController {
         fs.unlinkSync(file.localPath);
       }
 
-      await MemoryChunk.deleteMany({
-        fileId: file._id,
-        userId: userId,
-      });
+      await MemoryChunk.deleteMany({ fileId: file._id, userId });
 
       vault.files.splice(fileIndex, 1);
       await vault.save();
 
-      return res.status(200).json({
-        success: true,
-        message: "Memory fragment and vector chunks purged",
-      });
+      return res
+        .status(200)
+        .json({ success: true, message: "Document deleted" });
     } catch (error) {
       console.error("[Memory Delete Error]", error);
       return res
         .status(500)
-        .json({ success: false, message: "Failed to purge memory" });
+        .json({ success: false, message: "Failed to delete document" });
     }
   };
 
-  /** GET /rag-query?q=... */
+  /** GET /rag-query?q=... (debug / testing) */
   ragQuery = async (req: AuthRequest, res: Response) => {
     const userId = req.user?._id;
     if (!userId) {
@@ -314,10 +338,7 @@ export class MemoryController {
       topK,
     );
 
-    return res.status(200).json({
-      success: true,
-      data: { query: q, chunks },
-    });
+    return res.status(200).json({ success: true, data: { query: q, chunks } });
   };
 
   /** GET /vault */
@@ -329,19 +350,10 @@ export class MemoryController {
         .json({ success: false, message: "Not authenticated" });
     }
 
-    let vault = await MemoryVault.findOne({ userId }).lean();
-    if (!vault) {
-      vault = (
-        await MemoryVault.create({
-          userId,
-          files: [],
-          vectorConfig: { indexName: "vector_index", isIndexed: false },
-          encryption: { algorithm: "AES-256-GCM", isQuantumReady: false },
-        })
-      ).toJSON();
-    }
-
-    return res.status(200).json({ success: true, data: { vault } });
+    const vault = await getOrCreateVault(userId);
+    return res
+      .status(200)
+      .json({ success: true, data: { vault: toClientVault(vault) } });
   };
 }
 

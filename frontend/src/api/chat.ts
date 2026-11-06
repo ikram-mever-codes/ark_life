@@ -5,6 +5,8 @@ export interface ChatMessage {
   role: "user" | "avatar";
   text: string;
   createdAt: string;
+  /** Documents the AI used for this reply (only on fresh replies). */
+  sources?: { fileId: string; fileName: string; category: string }[];
 }
 
 export interface ChatResponse {

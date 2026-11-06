@@ -17,9 +17,22 @@ const ALLOWED_MIMES: Record<string, string> = {
   "audio/wav": "wav",
   "audio/wave": "wav",
   "audio/x-wav": "wav",
+  // Photos / scans of clinical reports (processed with OCR)
+  "image/jpeg": "jpg",
+  "image/png": "png",
 };
 
-const ALLOWED_EXT = new Set(["txt", "md", "pdf", "docx", "json", "mp3", "wav"]);
+const ALLOWED_EXT = new Set([
+  "txt",
+  "md",
+  "pdf",
+  "docx",
+  "json",
+  "mp3",
+  "wav",
+  "jpg",
+  "png",
+]);
 
 export function getMemoryUploadDir(userId: string): string {
   const dir = path.join(UPLOAD_BASE, userId);
@@ -41,6 +54,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const ext =
       ALLOWED_MIMES[file.mimetype] ||
+      (/\.jpe?g$/i.test(file.originalname || "") ? "jpg" : "") ||
       path
         .extname(file.originalname || "")
         .slice(1)
@@ -62,6 +76,7 @@ function fileFilter(
 ) {
   const ext =
     ALLOWED_MIMES[file.mimetype] ||
+    (/\.jpe?g$/i.test(file.originalname || "") ? "jpg" : "") ||
     path
       .extname(file.originalname || "")
       .slice(1)

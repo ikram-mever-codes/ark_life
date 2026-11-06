@@ -40,3 +40,23 @@ export const useCheck = (
 
   return false;
 };
+
+/**
+ * Convert an AI reply (Markdown) into plain text for captions and
+ * text-to-speech: removes **bold**, headings, table pipes, code marks and
+ * separator lines so the voice does not read symbols aloud.
+ */
+export const markdownToSpeech = (md: string): string =>
+  (md || "")
+    .replace(/^\s*\|?\s*:?-{2,}.*$/gm, "") // table separator rows / ---
+    .replace(/^\s*-{3,}\s*$/gm, "")
+    .replace(/\|/g, ", ")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/(^|\s)[*_](\S[^*_]*\S|\S)[*_](?=\s|$|[.,;:!?])/g, "$1$2")
+    .replace(/^\s*[*-]\s+/gm, "")
+    .replace(/[📄💡]/gu, "")
+    .replace(/(,\s*){2,}/g, ", ")
+    .replace(/^\s*,\s*|\s*,\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();

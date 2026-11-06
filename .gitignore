@@ -1,0 +1,5 @@
+# Local notes / tooling
+CLAUDE.local.md
+.claude/
+.DS_Store
+*.log

@@ -5,7 +5,7 @@ import { avatarUpload } from "../config/multerAvatar";
 
 const router = Router();
 
-router.get("/test-replicate", avatarController.generateTestAvatar);
+// test-replicate route removed (unauthenticated + paid API). Kept in controller for reference.
 // router.get("/delete", avatarController.clearAllVoices);
 router.use(authenticate);
 

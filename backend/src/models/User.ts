@@ -18,7 +18,7 @@ export interface IUser extends Document {
   passwordResetToken?: string;
   passwordResetExpires?: Date;
   lastLogin?: Date;
-  useage: {
+  usage: {
     avatarCount: number;
     monthlyMessageCount: number;
     lastUsageReset: Date;
@@ -144,7 +144,7 @@ UserSchema.methods.generateEmailVerificationToken = function (): string {
 
 // Generate OTP for email verification (6-digit, expires in 10 min)
 UserSchema.methods.generateOTP = function (): string {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otp = crypto.randomInt(100000, 1000000).toString();
   this.otpCode = otp;
   this.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
   return otp;

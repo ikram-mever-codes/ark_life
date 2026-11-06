@@ -274,9 +274,15 @@ export class AvatarController {
 
   update = async (req: AuthRequest, res: Response) => {
     try {
+      // Only user-editable fields may be updated (prevents mass assignment of
+      // voiceId, userId, status, masterVideoUrl, ...).
+      const allowed: Record<string, unknown> = {};
+      for (const k of ["name", "description"] as const) {
+        if (typeof req.body?.[k] === "string") allowed[k] = req.body[k].trim();
+      }
       const avatar = await Avatar.findOneAndUpdate(
         { _id: req.params.id, userId: req.user?._id },
-        req.body,
+        { $set: allowed },
         { new: true },
       );
       return res.status(200).json({ success: true, data: { avatar } });

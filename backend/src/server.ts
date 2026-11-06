@@ -1,10 +1,9 @@
+import "./config/env";
 import "./pre-start";
 import app from "./app";
-import dotenv from "dotenv";
+import { resumePendingDocuments } from "./services/documentProcessingService";
 
-dotenv.config();
-
-const PORT = 8000;
+const PORT = Number(process.env.PORT) || 8000;
 
 // Catch unhandled promise rejections
 process.on("unhandledRejection", (reason: any, promise) => {
@@ -45,7 +44,11 @@ const server = app.listen(PORT, () => {
   🌐 Frontend: ${process.env.FRONTEND_URL || "http://localhost:3000"}
   📅 Time: ${new Date().toLocaleString()}
   `);
-  // testRawHttpsToD_ID(process.env.DID_API_KEY || "");
+  // Re-queue documents whose processing was interrupted by a restart so
+  // nothing stays stuck in "Processing" forever.
+  resumePendingDocuments().catch((e) =>
+    console.error("[Documents] Could not resume pending documents:", e),
+  );
 });
 
 // Graceful shutdown

@@ -170,10 +170,10 @@ const Dashboard: React.FC = () => {
                 <Play size={16} fill="currentColor" /> Neural Chat
               </button>
               <button
-                onClick={() => router.push("/memory")}
+                onClick={() => router.push("/clinical")}
                 className="flex items-center justify-center gap-2 bg-surface-elevated border border-border font-bold text-sm px-6 py-3 rounded-xl hover:border-primary/40 transition-colors"
               >
-                <Database size={16} className="text-primary" /> Memory Vault
+                <Database size={16} className="text-primary" /> Clinical Records
               </button>
             </div>
           </div>
