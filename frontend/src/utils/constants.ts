@@ -1,7 +1,7 @@
 // Backend URL — set NEXT_PUBLIC_API_URL in frontend/.env.local (dev) or in the
 // production environment (e.g. https://api.arklifeproject.com).
 export const BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8010"
 ).replace(/\/+$/, "");
 
 export const successStyles = {
