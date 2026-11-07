@@ -24,6 +24,19 @@ export interface Avatar {
   };
 
   updatedAt: string;
+  identity?: AvatarIdentity;
+}
+
+/** Identity card shown on the twin Overview page (all optional). */
+export interface AvatarIdentity {
+  age?: number | null;
+  gender?: string;
+  location?: string;
+  occupation?: string;
+  languages?: string;
+  height?: string;
+  weight?: string;
+  eyes?: string;
 }
 
 export interface CreateAvatarPayload {
@@ -36,6 +49,7 @@ export interface UpdateAvatarPayload {
   description?: string;
   status?: AvatarStatus;
   heroImageUrl?: string;
+  identity?: AvatarIdentity;
 }
 
 // ==================== AVATAR API ROUTES ====================

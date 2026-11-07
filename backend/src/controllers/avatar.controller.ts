@@ -280,6 +280,27 @@ export class AvatarController {
       for (const k of ["name", "description"] as const) {
         if (typeof req.body?.[k] === "string") allowed[k] = req.body[k].trim();
       }
+      // Identity card fields (twin Overview page)
+      const id = req.body?.identity;
+      if (id && typeof id === "object") {
+        for (const k of [
+          "gender",
+          "location",
+          "occupation",
+          "languages",
+          "height",
+          "weight",
+          "eyes",
+        ] as const) {
+          if (typeof id[k] === "string") {
+            allowed[`identity.${k}`] = id[k].trim().slice(0, 160);
+          }
+        }
+        if (id.age === null || id.age === "") allowed["identity.age"] = null;
+        else if (id.age !== undefined && Number.isFinite(Number(id.age))) {
+          allowed["identity.age"] = Math.max(0, Math.min(130, Math.round(Number(id.age))));
+        }
+      }
       const avatar = await Avatar.findOneAndUpdate(
         { _id: req.params.id, userId: req.user?._id },
         { $set: allowed },

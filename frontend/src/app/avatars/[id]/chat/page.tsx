@@ -8,7 +8,6 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  ChevronLeft,
   Settings2,
   Send,
   Mic,
@@ -19,18 +18,19 @@ import {
   X,
   Volume2,
   VolumeX,
-  PanelLeft,
-  PanelRight,
-  Activity,
-  Heart,
-  Moon,
-  Droplet,
-  Ruler,
-  Weight,
-  MapPin,
-  Wind,
-  Footprints,
 } from "lucide-react";
+import { useSelector } from "react-redux";
+import { selectIsEmailVerified } from "@/app/Redux/features/userSlice";
+import {
+  BiometricPanel,
+  CornerFrame,
+  HealthOverviewPanel,
+  IdentityPanel,
+  LifestylePanel,
+  TwinNav,
+  VerifiedPanel,
+  VitalsPanel,
+} from "@/components/twin/TwinPanels";
 import { toast } from "react-hot-toast";
 import { getAvatarById, testAvatarSpeech, Avatar } from "@/api/avatars";
 import { getAssetUrl } from "../page";
@@ -55,8 +55,8 @@ const AvatarChatPage = () => {
   const [captionDone, setCaptionDone] = useState(true);
   const [audioFailed, setAudioFailed] = useState(false);
 
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false); // conversation drawer
+  const emailVerified = useSelector(selectIsEmailVerified);
 
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(true);
@@ -426,147 +426,73 @@ const AvatarChatPage = () => {
   const showMasterVideo =
     engineState === "speaking" && !!avatar.masterVideoUrl && !videoBroken;
 
+  const lastReply = [...messages].reverse().find((m) => m.role === "avatar");
+  const typing = !captionDone && !!caption;
+
   return (
-    <div className="h-[90vh] w-full bg-background text-foreground flex overflow-hidden scrollbar-theme">
-      {/* ── Left panel — avatar info — desktop static, mobile slide-over ── */}
-      <aside className="hidden lg:flex flex-col w-70 xl:w-90 border-r border-border shrink-0 bg-surface">
-        <LeftPanelContent
-          avatar={avatar}
-          stateLabel={stateLabel}
-          stateColor={stateColor}
-        />
-      </aside>
+    <div className="twin-page min-h-[calc(100dvh-4rem)] w-full min-w-0 overflow-x-hidden text-foreground scrollbar-theme">
+      <TwinNav
+        avatar={avatar}
+        active="overview"
+        onOpenChat={() => setRightOpen(true)}
+        messageCount={messages.length}
+      />
 
-      <AnimatePresence>
-        {leftOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="lg:hidden fixed inset-0 z-40 bg-overlay backdrop-blur-sm"
-            onClick={() => setLeftOpen(false)}
-          >
-            <motion.aside
-              initial={{ x: "-100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "-100%" }}
-              transition={{ type: "tween", duration: 0.22 }}
-              className="h-full w-[80%] max-w-xs bg-surface border-r border-border flex flex-col"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-3 py-2.5 border-b border-border shrink-0">
-                <span className="hud-title text-xs text-foreground normal-case">
-                  Twin Info
-                </span>
-                <button
-                  onClick={() => setLeftOpen(false)}
-                  className="text-foreground-subtle"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              <LeftPanelContent
-                avatar={avatar}
-                stateLabel={stateLabel}
-                stateColor={stateColor}
-              />
-            </motion.aside>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 p-3 sm:p-4 lg:p-5 lg:grid-cols-[minmax(250px,290px)_minmax(0,1fr)_minmax(270px,320px)] lg:h-[calc(100dvh-4rem-3.5rem)]">
+        {/* ── LEFT — identity · verified · biometric ─────────────────── */}
+        <aside className="order-2 lg:order-none flex flex-col gap-4 lg:overflow-y-auto lg:pr-1 min-h-0">
+          <IdentityPanel avatar={avatar} onUpdated={(a) => setAvatar(a)} />
+          <VerifiedPanel emailVerified={!!emailVerified} />
+          <BiometricPanel
+            avatar={avatar}
+            imageUrl={
+              avatar.heroImageUrl ? getAssetUrl(avatar.heroImageUrl) : undefined
+            }
+            speaking={engineState === "speaking"}
+          />
+        </aside>
 
-      {/* ── Center — avatar viewport, caption, input ────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0  overflow-hidden">
-        {/* Mobile top bar */}
-        <div className="lg:hidden flex items-center justify-between px-2 py-2 border-b border-border shrink-0">
-          <button
-            onClick={() => setLeftOpen(true)}
-            className="p-1.5 rounded-lg text-foreground-muted hover:text-primary transition-colors"
-          >
-            <PanelLeft size={18} />
-          </button>
-          <div className="flex items-center gap-1.5">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${engineState === "idle" ? "bg-foreground-subtle" : "bg-primary animate-pulse"}`}
-            />
-            <span className="text-sm font-bold">{avatar.name}</span>
-          </div>
-          <button
-            onClick={() => setRightOpen(true)}
-            className="p-1.5 rounded-lg text-foreground-muted hover:text-primary transition-colors"
-          >
-            <PanelRight size={18} />
-          </button>
-        </div>
+        {/* ── CENTER — portrait · reply · input ──────────────────────── */}
+        <section className="order-1 lg:order-none flex flex-col gap-3 min-h-0 min-w-0">
+          <div className="relative h-[52vh] sm:h-[60vh] lg:h-auto lg:flex-1 lg:min-h-0 rounded-lg overflow-hidden border border-border/50 bg-[radial-gradient(ellipse_at_center,rgba(24,185,205,0.06),transparent_70%)]">
+            <CornerFrame active={engineState !== "idle"} />
 
-        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 px-2 py-2 md:px-4 md:py-3">
-          <div className="relative w-full max-w-[min(58vh,24rem)] aspect-square rounded-2xl border border-border bg-surface overflow-hidden shrink-0">
-            <div
-              className="absolute inset-0 rounded-2xl transition-shadow duration-500 pointer-events-none z-20"
-              style={{
-                boxShadow:
-                  engineState === "speaking"
-                    ? "inset 0 0 0 2px var(--arklife-primary), 0 0 40px rgba(24,185,205,0.25)"
-                    : engineState === "listening"
-                      ? "inset 0 0 0 2px var(--warning), 0 0 40px rgba(245,158,11,0.15)"
-                      : "inset 0 0 0 1px var(--border-color)",
-              }}
-            />
-
-            {/* Still hero image — the permanent base layer. Its opacity
-                is the exact inverse of the video's, so the crossfade
-                below has no gap: there is never a frame where neither
-                (or both, oddly) is the visible one. */}
             {avatar.heroImageUrl ? (
               <motion.img
                 src={getAssetUrl(avatar.heroImageUrl)}
                 alt={avatar.name}
-                className="absolute inset-0 w-full h-full object-cover"
+                className="absolute inset-0 w-full h-full object-cover object-top"
                 animate={{ opacity: showMasterVideo ? 0 : 1 }}
                 transition={{ duration: 0.15 }}
               />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-foreground-subtle">
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-foreground-subtle">
                 <MessageSquare size={40} strokeWidth={1} />
-                <span className="hud-label">3D Avatar — Coming Soon</span>
+                <span className="hud-label">No photo yet</span>
               </div>
             )}
 
-            {/* Master video — ALWAYS mounted when masterVideoUrl exists,
-                regardless of speaking state. preload="auto" means the
-                browser buffers it in the background the moment the page
-                loads, so by the time engineState actually becomes
-                "speaking" (driven by audio.onplaying — real playback,
-                not the API call), play() is instant with nothing left to
-                fetch. Muted because the audible TTS audio is a separate
-                <audio> element; this clip is visual only. Play/pause is
-                handled by the useEffect above, not by mounting/unmounting
-                this element — that's what removes both the lag and the
-                blank-screen flash between messages. */}
+            {/* Master video: always mounted and pre-buffered; only opacity
+                and play/pause change (avoids lag and blank frames). */}
             {avatar.masterVideoUrl && (
               <motion.video
                 ref={videoElRef}
                 src={avatar.masterVideoUrl}
-                className="absolute inset-0 w-full h-full object-cover"
+                className="absolute inset-0 w-full h-full object-cover object-top"
                 animate={{ opacity: showMasterVideo ? 1 : 0 }}
                 transition={{ duration: 0.15 }}
                 loop
                 muted
                 playsInline
                 preload="auto"
-                onError={() => {
-                  // Clip failed to load (e.g. expired signed URL) — flip
-                  // videoBroken so showMasterVideo stays false and the
-                  // play/pause effect stops trying to use this element.
-                  // The hero image underneath is already the visible
-                  // layer whenever this isn't showing, so nothing else
-                  // breaks.
-                  setVideoBroken(true);
-                }}
+                onError={() => setVideoBroken(true)}
               />
             )}
 
-            <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 bg-background/70 backdrop-blur-md border border-border px-2 py-0.5 rounded-full z-30">
+            {/* bottom fade */}
+            <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-background/90 to-transparent pointer-events-none z-10" />
+
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-background/70 backdrop-blur-md border border-border px-2.5 py-1 rounded-full z-30">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   engineState === "speaking"
@@ -576,120 +502,129 @@ const AvatarChatPage = () => {
                       : "bg-foreground-subtle"
                 }`}
               />
-              <span className="hud-label">{stateLabel}</span>
+              <span className="hud-label !text-[9.5px]">{stateLabel}</span>
             </div>
           </div>
 
-          {/* Live caption */}
-          <div className="w-full max-w-[min(58vh,24rem)] min-h-[3.5rem] bg-surface border border-border rounded-xl px-3.5 py-2.5 shrink-0">
-            <span className="hud-label mb-1 flex items-center gap-1.5 text-primary/80">
-              {audioFailed ? (
-                <>
-                  <VolumeX size={11} /> Caption (audio unavailable)
-                </>
-              ) : (
-                <>
-                  <Volume2 size={11} /> Live Caption
-                </>
-              )}
-            </span>
-            <p className="text-sm text-foreground leading-relaxed line-clamp-3">
-              {caption ? (
-                <>
-                  {caption}
-                  {!captionDone && (
-                    <span className="inline-block w-1.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
-                  )}
-                </>
-              ) : (
-                <span className="text-foreground-subtle">
-                  Say hello to start the conversation with {avatar.name}.
+          {/* Reply panel: live caption while speaking, full answer after */}
+          <div className="rounded-lg border border-border/70 bg-surface-elevated/60 px-4 py-3 shrink-0">
+            <div className="flex items-center justify-between mb-1">
+              <span className="hud-label !text-[9.5px] flex items-center gap-1.5 text-primary/80">
+                {audioFailed ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                {audioFailed
+                  ? "Reply (audio unavailable)"
+                  : typing
+                    ? "Speaking"
+                    : "Last reply"}
+              </span>
+              {lastReply?.sources && lastReply.sources.length > 0 && !typing && (
+                <span className="text-[10px] text-foreground-subtle truncate ml-3">
+                  📄 {lastReply.sources.map((s) => s.fileName).join(" · ")}
                 </span>
               )}
-            </p>
-          </div>
-        </div>
-
-        {/* Sticky input bar */}
-        <div className="shrink-0 border-t border-border bg-surface px-2 py-2 md:px-4 md:py-2.5">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleListening}
-              disabled={isSending}
-              className={`shrink-0 w-10 h-10 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-40 ${
-                isListening
-                  ? "bg-error/15 border-error/50 text-error"
-                  : "border-border text-foreground-muted hover:text-primary hover:border-primary/40"
-              }`}
-              title={
-                speechSupported
-                  ? "Voice message"
-                  : "Voice input not supported in this browser"
-              }
-            >
-              {isListening ? <MicOff size={17} /> : <Mic size={17} />}
-            </button>
-            <button
-              onClick={() => {
-                const next = speechLang === "it-IT" ? "en-US" : "it-IT";
-                setSpeechLang(next);
-                try {
-                  localStorage.setItem("arklife_voice_lang", next);
-                } catch {}
-              }}
-              disabled={isListening}
-              className="shrink-0 h-10 px-2 rounded-lg border border-border text-[11px] font-semibold text-foreground-muted hover:text-primary hover:border-primary/40 disabled:opacity-40"
-              title="Voice input language"
-            >
-              {speechLang === "it-IT" ? "IT" : "EN"}
-            </button>
-
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isSending}
-              placeholder={
-                isListening ? "Listening..." : `Message ${avatar.name}...`
-              }
-              className="flex-1 min-w-0 bg-background border border-border rounded-lg px-3.5 py-2.5 text-sm outline-none focus:border-primary/60 transition-colors disabled:opacity-60"
-            />
-
-            <button
-              onClick={handleSend}
-              disabled={isSending || !inputText.trim()}
-              className="shrink-0 w-10 h-10 rounded-lg bg-primary text-background flex items-center justify-center disabled:opacity-30 hover:brightness-110 transition-all"
-            >
-              {isSending ? (
-                <Loader2 size={17} className="animate-spin" />
+            </div>
+            <div className="max-h-32 lg:max-h-36 overflow-y-auto text-sm leading-relaxed pr-1">
+              {typing ? (
+                <p className="text-foreground">
+                  {caption}
+                  <span className="inline-block w-1.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
+                </p>
+              ) : lastReply ? (
+                <div className="chat-md text-foreground">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {lastReply.text}
+                  </ReactMarkdown>
+                </div>
               ) : (
-                <Send size={16} />
+                <p className="text-foreground-subtle">
+                  Say hello to start the conversation with {avatar.name}.
+                </p>
               )}
-            </button>
+            </div>
           </div>
-          {isListening && (
-            <p className="hud-label text-error mt-1 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse" />{" "}
-              Recording — tap mic to send
-            </p>
-          )}
-        </div>
+
+          {/* Input bar */}
+          <div className="sticky bottom-0 lg:static z-30 rounded-lg border border-border/70 bg-surface/95 backdrop-blur px-2 py-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleListening}
+                disabled={isSending}
+                className={`shrink-0 w-10 h-10 rounded-md border flex items-center justify-center transition-colors disabled:opacity-40 ${
+                  isListening
+                    ? "bg-error/15 border-error/50 text-error"
+                    : "border-border text-foreground-muted hover:text-primary hover:border-primary/40"
+                }`}
+                title={
+                  speechSupported
+                    ? "Voice message"
+                    : "Voice input not supported in this browser"
+                }
+              >
+                {isListening ? <MicOff size={17} /> : <Mic size={17} />}
+              </button>
+              <button
+                onClick={() => {
+                  const next = speechLang === "it-IT" ? "en-US" : "it-IT";
+                  setSpeechLang(next);
+                  try {
+                    localStorage.setItem("arklife_voice_lang", next);
+                  } catch {}
+                }}
+                disabled={isListening}
+                className="shrink-0 h-10 px-2 rounded-md border border-border text-[11px] font-semibold text-foreground-muted hover:text-primary hover:border-primary/40 disabled:opacity-40"
+                title="Voice input language"
+              >
+                {speechLang === "it-IT" ? "IT" : "EN"}
+              </button>
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isSending}
+                placeholder={
+                  isListening ? "Listening..." : `Message ${avatar.name}...`
+                }
+                className="flex-1 min-w-0 bg-background border border-border rounded-md px-3.5 py-2.5 text-sm outline-none focus:border-primary/60 transition-colors disabled:opacity-60"
+              />
+              <button
+                onClick={handleSend}
+                disabled={isSending || !inputText.trim()}
+                className="shrink-0 w-10 h-10 rounded-md bg-primary text-background flex items-center justify-center disabled:opacity-30 hover:brightness-110 transition-all"
+              >
+                {isSending ? (
+                  <Loader2 size={17} className="animate-spin" />
+                ) : (
+                  <Send size={16} />
+                )}
+              </button>
+            </div>
+            {isListening && (
+              <p className="hud-label text-error mt-1 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse" />{" "}
+                Recording — tap mic to send
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* ── RIGHT — health overview · vitals · lifestyle ───────────── */}
+        <aside className="order-3 lg:order-none flex flex-col gap-4 lg:overflow-y-auto lg:pl-1 min-h-0">
+          <HealthOverviewPanel />
+          <VitalsPanel />
+          <LifestylePanel />
+        </aside>
       </div>
 
-      {/* ── Right panel — chat history — desktop static, mobile slide-over ── */}
-      <aside className="hidden lg:flex flex-col w-90 xl:w-100 border-l border-border shrink-0 bg-surface">
-        <RightPanelContent messages={messages} historyEndRef={historyEndRef} />
-      </aside>
-
+      {/* ── Conversation drawer ─────────────────────────────────────────── */}
       <AnimatePresence>
         {rightOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="lg:hidden fixed inset-0 z-40 bg-overlay backdrop-blur-sm"
+            className="fixed inset-0 z-[60] bg-overlay backdrop-blur-sm"
             onClick={() => setRightOpen(false)}
           >
             <motion.aside
@@ -697,16 +632,14 @@ const AvatarChatPage = () => {
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "tween", duration: 0.22 }}
-              className="h-full w-[80%] max-w-xs bg-surface border-l border-border flex flex-col ml-auto"
+              className="h-full w-[92%] max-w-md bg-surface border-l border-border flex flex-col ml-auto"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between px-3 py-2.5 border-b border-border shrink-0">
-                <span className="hud-title text-xs text-foreground normal-case">
-                  Conversation
-                </span>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                <span className="hud-title text-sm">Conversation</span>
                 <button
                   onClick={() => setRightOpen(false)}
-                  className="text-foreground-subtle"
+                  className="text-foreground-subtle hover:text-foreground"
                 >
                   <X size={18} />
                 </button>
@@ -720,8 +653,22 @@ const AvatarChatPage = () => {
         )}
       </AnimatePresence>
 
-      {/* Themed scrollbars */}
       <style jsx global>{`
+        .twin-page {
+          background:
+            radial-gradient(
+              ellipse 60% 50% at 50% 30%,
+              rgba(24, 185, 205, 0.05),
+              transparent 70%
+            ),
+            var(--background);
+        }
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          scrollbar-width: none;
+        }
         .scrollbar-theme *::-webkit-scrollbar {
           width: 6px;
           height: 6px;
@@ -740,308 +687,42 @@ const AvatarChatPage = () => {
           scrollbar-width: thin;
           scrollbar-color: var(--border-color) transparent;
         }
-
-        .heartbeat-icon {
-          animation: heartbeatPulse 1.15s ease-in-out infinite;
+        .twin-wave {
+          animation: twinWave 1.1s ease-in-out infinite;
           transform-origin: center;
         }
-        @keyframes heartbeatPulse {
+        @keyframes twinWave {
           0%,
           100% {
-            transform: scale(1);
-          }
-          15% {
-            transform: scale(1.25);
-          }
-          30% {
-            transform: scale(1);
-          }
-          45% {
-            transform: scale(1.15);
-          }
-          60% {
-            transform: scale(1);
-          }
-        }
-        .ecg-line {
-          stroke-dasharray: 260;
-          stroke-dashoffset: 260;
-          animation: ecgDraw 2.4s linear infinite;
-        }
-        @keyframes ecgDraw {
-          0% {
-            stroke-dashoffset: 260;
-            opacity: 0.3;
+            transform: scaleY(0.45);
           }
           50% {
-            stroke-dashoffset: 0;
+            transform: scaleY(1);
+          }
+        }
+        .twin-scan {
+          animation: twinScan 3.2s ease-in-out infinite;
+        }
+        @keyframes twinScan {
+          0% {
+            top: 8%;
+            opacity: 0;
+          }
+          15% {
+            opacity: 1;
+          }
+          85% {
             opacity: 1;
           }
           100% {
-            stroke-dashoffset: -260;
-            opacity: 0.3;
-          }
-        }
-        .ring-gauge-pulse {
-          animation: ringPulse 2.6s ease-in-out infinite;
-        }
-        @keyframes ringPulse {
-          0%,
-          100% {
-            opacity: 0.35;
-          }
-          50% {
-            opacity: 0.9;
+            top: 92%;
+            opacity: 0;
           }
         }
       `}</style>
     </div>
   );
 };
-
-/* ── Left panel — avatar identity + health overview + settings ──────── */
-const LeftPanelContent = ({
-  avatar,
-  stateLabel,
-  stateColor,
-}: {
-  avatar: Avatar;
-  stateLabel: string;
-  stateColor: string;
-}) => (
-  <>
-    <div className="p-3 border-b border-border shrink-0">
-      <Link
-        href="/avatars"
-        className="hud-label flex items-center gap-1.5 text-foreground-subtle hover:text-foreground transition-colors"
-      >
-        <ChevronLeft size={14} /> All Twins
-      </Link>
-    </div>
-
-    <div className="p-3 flex items-center gap-3 border-b border-border shrink-0">
-      <div className="relative w-14 h-14 rounded-full overflow-hidden bg-surface-elevated border border-border shrink-0">
-        {avatar.heroImageUrl && (
-          <img
-            src={getAssetUrl(avatar.heroImageUrl)}
-            className="w-full h-full object-cover"
-            alt={avatar.name}
-          />
-        )}
-        <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-background border-2 border-background flex items-center justify-center">
-          <span
-            className={`w-2 h-2 rounded-full ${stateColor.includes("primary") ? "bg-primary animate-pulse" : stateColor.includes("warning") ? "bg-warning animate-pulse" : "bg-foreground-subtle"}`}
-          />
-        </span>
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold truncate">{avatar.name}</p>
-        <p className={`hud-label mt-0.5 ${stateColor}`}>{stateLabel}</p>
-      </div>
-    </div>
-
-    <div className="flex-1 min-h-0 overflow-y-auto">
-      <HealthOverview />
-    </div>
-
-    <div className="p-3 border-t border-border shrink-0 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-3 text-[10px] font-bold text-foreground-subtle">
-        <span>{avatar.photoUrls?.length ?? 0} photos</span>
-        <span>{avatar.voiceSampleUrls?.length ?? 0} voice</span>
-        <span className="capitalize">{avatar.status}</span>
-      </div>
-      <Link
-        href={`/avatars/${avatar._id}`}
-        className="p-2 rounded-lg border border-border hover:border-primary/40 text-foreground-muted hover:text-primary transition-colors shrink-0"
-        title="Edit Twin"
-      >
-        <Settings2 size={14} />
-      </Link>
-    </div>
-  </>
-);
-
-/* ── Health Overview — the sidebar's dominant section, sample data ──── */
-const HealthOverview = () => (
-  <div className="p-3.5">
-    <div className="flex items-center justify-between mb-3.5">
-      <p className="hud-label text-primary/80 flex items-center gap-1.5 text-xs">
-        <Activity size={13} /> Vitals Overview
-      </p>
-      <span className="flex items-center gap-1 text-[9px] font-bold text-warning uppercase tracking-wide bg-warning/10 border border-warning/25 px-2 py-0.5 rounded-full">
-        <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
-        Demo Data
-      </span>
-    </div>
-
-    {/* Heart rate — hero metric, animated ECG line */}
-    <div className="bg-surface-elevated border border-border rounded-xl p-4 mb-3 relative overflow-hidden">
-      <div className="flex items-center justify-between mb-2">
-        <span className="flex items-center gap-1.5 hud-label text-foreground-muted">
-          <Heart size={13} className="text-error heartbeat-icon" /> Heart Rate
-        </span>
-        <span className="hud-metric text-2xl text-foreground leading-none">
-          72{" "}
-          <span className="text-[11px] text-foreground-subtle font-normal">
-            bpm
-          </span>
-        </span>
-      </div>
-      <svg
-        viewBox="0 0 200 44"
-        className="w-full h-10 ecg-svg"
-        preserveAspectRatio="none"
-      >
-        <polyline
-          points="0,22 30,22 40,8 50,36 60,22 90,22 100,4 110,40 120,22 200,22"
-          fill="none"
-          stroke="var(--arklife-primary)"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="ecg-line"
-        />
-      </svg>
-      <p className="text-[10px] text-foreground-subtle mt-1">
-        Resting — normal range
-      </p>
-    </div>
-
-    {/* Sleep + Hydration — twin ring gauges with sample fills */}
-    <div className="grid grid-cols-2 gap-3 mb-3">
-      <div className="bg-surface-elevated border border-border rounded-xl p-3.5 flex flex-col items-center">
-        <RingGauge
-          icon={<Moon size={15} className="text-info" />}
-          colorVar="var(--info)"
-          percent={0.82}
-        />
-        <span className="hud-metric text-lg text-foreground mt-2">7.4h</span>
-        <span className="hud-label text-foreground-subtle">Sleep</span>
-        <span className="text-[9px] text-info mt-0.5 font-bold">
-          Good quality
-        </span>
-      </div>
-      <div className="bg-surface-elevated border border-border rounded-xl p-3.5 flex flex-col items-center">
-        <RingGauge
-          icon={<Droplet size={15} className="text-primary" />}
-          colorVar="var(--arklife-primary)"
-          percent={0.64}
-        />
-        <span className="hud-metric text-lg text-foreground mt-2">1.6L</span>
-        <span className="hud-label text-foreground-subtle">Hydration</span>
-        <span className="text-[9px] text-warning mt-0.5 font-bold">
-          Below goal
-        </span>
-      </div>
-    </div>
-
-    {/* SpO2 + Steps — secondary metrics row */}
-    <div className="grid grid-cols-2 gap-3 mb-3">
-      <div className="bg-surface-elevated border border-border rounded-xl p-3">
-        <span className="hud-label text-foreground-muted flex items-center gap-1.5 mb-1">
-          <Wind size={12} className="text-primary" /> SpO2
-        </span>
-        <p className="hud-metric text-lg text-foreground">
-          98<span className="text-xs text-foreground-subtle">%</span>
-        </p>
-      </div>
-      <div className="bg-surface-elevated border border-border rounded-xl p-3">
-        <span className="hud-label text-foreground-muted flex items-center gap-1.5 mb-1">
-          <Footprints size={12} className="text-primary" /> Steps
-        </span>
-        <p className="hud-metric text-lg text-foreground">6,214</p>
-      </div>
-    </div>
-
-    {/* Bio — height / weight / location */}
-    <div className="bg-surface-elevated border border-border rounded-xl p-3.5 space-y-2.5">
-      <p className="hud-label text-foreground-subtle mb-0.5">Bio</p>
-      <BioRow icon={<Ruler size={13} />} label="Height" value="178 cm" />
-      <BioRow icon={<Weight size={13} />} label="Weight" value="74 kg" />
-      <BioRow icon={<MapPin size={13} />} label="Location" value="Milan, IT" />
-    </div>
-
-    <p className="hud-label text-foreground-subtle mt-3 text-center leading-relaxed px-1">
-      Sample data — connect a wearable for live vitals
-    </p>
-  </div>
-);
-
-/* Radial progress ring — accepts a real percent for sample fills */
-const RingGauge = ({
-  icon,
-  colorVar,
-  percent = 0,
-}: {
-  icon: React.ReactNode;
-  colorVar: string;
-  percent?: number;
-}) => {
-  const radius = 19;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - percent);
-  return (
-    <div className="relative w-12 h-12 flex items-center justify-center">
-      <svg viewBox="0 0 48 48" className="w-12 h-12 -rotate-90">
-        <circle
-          cx="24"
-          cy="24"
-          r={radius}
-          fill="none"
-          stroke="var(--border-color)"
-          strokeWidth="3.5"
-        />
-        <circle
-          cx="24"
-          cy="24"
-          r={radius}
-          fill="none"
-          stroke={colorVar}
-          strokeWidth="3.5"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          className="ring-gauge-pulse"
-        />
-      </svg>
-      <span className="absolute inset-0 flex items-center justify-center">
-        {icon}
-      </span>
-    </div>
-  );
-};
-
-const BioRow = ({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) => (
-  <div className="flex items-center justify-between">
-    <span className="flex items-center gap-1.5 hud-label text-foreground-muted">
-      {icon} {label}
-    </span>
-    <span className="text-xs font-medium text-foreground">{value}</span>
-  </div>
-);
-
-const InfoRow = ({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) => (
-  <div className="flex items-center justify-between px-1 py-1.5">
-    <span className="hud-label">{label}</span>
-    <span className="hud-metric text-xs text-foreground capitalize">
-      {value}
-    </span>
-  </div>
-);
 
 /* ── Right panel — chat history only ─────────────────────────────────── */
 const RightPanelContent = ({
@@ -1052,12 +733,7 @@ const RightPanelContent = ({
   historyEndRef: any;
 }) => (
   <>
-    <div className="px-3 py-2.5 border-b border-border shrink-0">
-      <h2 className="hud-title text-xs text-foreground normal-case">
-        Conversation
-      </h2>
-    </div>
-    <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5 space-y-1.5">
+    <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-2">
       {messages.length === 0 && (
         <p className="text-xs text-foreground-subtle text-center mt-8 px-2">
           No messages yet. Say hello to start.
