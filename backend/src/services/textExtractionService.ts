@@ -16,9 +16,19 @@ const TEXT_EXTENSIONS = new Set(["txt", "md", "json", "pdf", "docx"]);
 // Images are handled by the OCR pipeline (documentProcessingService), not here.
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav"]);
 const MAX_EXTRACTED_TEXT_BYTES = 500 * 1024;
+/** Images at least this big (in source pixels, ~ 700×600) count as scanned content. */
+const LARGE_IMAGE_PIXELS = 400_000;
 
 export type ExtractResult =
-  | { text: string; ok: true; pageCount?: number }
+  | {
+      text: string;
+      ok: true;
+      pageCount?: number;
+      /** Text of each page read (PDF only). */
+      pages?: string[];
+      /** Per page: contains a large image, e.g. a scanned table (PDF only). */
+      largeImagePages?: boolean[];
+    }
   | { text?: string; ok: false; error: string };
 
 let pdfjsPromise: Promise<any> | null = null;
@@ -84,6 +94,8 @@ async function extractPdfText(filePath: string): Promise<ExtractResult> {
   const doc = await loadingTask.promise;
   const numPages = doc.numPages;
   let assembledText = "";
+  const pages: string[] = [];
+  const largeImagePages: boolean[] = [];
 
   try {
     for (let pageNum = 1; pageNum <= numPages; pageNum++) {
@@ -104,7 +116,32 @@ async function extractPdfText(filePath: string): Promise<ExtractResult> {
           .map((it: any) => ("str" in it ? it.str : ""))
           .join(" ");
 
+        pages.push(pageText);
         assembledText += pageText + "\n\n";
+
+        // Detect large embedded images (a scanned table under a text
+        // letterhead). Logos and icons are small and are ignored.
+        try {
+          const ops = await page.getOperatorList();
+          const IMG = new Set(
+            [
+              pdfjs.OPS?.paintImageXObject,
+              pdfjs.OPS?.paintInlineImageXObject,
+              pdfjs.OPS?.paintImageXObjectRepeat,
+            ].filter((v) => v !== undefined),
+          );
+          let maxPx = 0;
+          ops.fnArray.forEach((fn: number, i: number) => {
+            if (!IMG.has(fn)) return;
+            const a = ops.argsArray[i] || [];
+            const w = typeof a[1] === "number" ? a[1] : a[0]?.width || 0;
+            const h = typeof a[2] === "number" ? a[2] : a[0]?.height || 0;
+            maxPx = Math.max(maxPx, w * h);
+          });
+          largeImagePages.push(maxPx >= LARGE_IMAGE_PIXELS);
+        } catch {
+          largeImagePages.push(false);
+        }
       } finally {
         try {
           page.cleanup();
@@ -112,7 +149,14 @@ async function extractPdfText(filePath: string): Promise<ExtractResult> {
       }
     }
 
-    return { ok: true, text: assembledText.trim(), pageCount: numPages };
+    // `pages` only contains pages actually read (the size guard may stop early).
+    return {
+      ok: true,
+      text: assembledText.trim(),
+      pageCount: numPages,
+      pages,
+      largeImagePages,
+    };
   } finally {
     try {
       await doc.destroy();

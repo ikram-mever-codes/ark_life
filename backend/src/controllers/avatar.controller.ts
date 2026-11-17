@@ -645,10 +645,19 @@ export class AvatarController {
       .replace(/[`'"]/g, "")
       .trim();
 
+    // Chat replies are sent in short chunks by the frontend; cap the size of a
+    // single request to protect credits.
+    const speechText = String(text || "Neural link active.").slice(0, 1200);
+
     try {
       const response = await axios.post(
         `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        { text: text || "Neural link active." },
+        {
+          text: speechText,
+          // Low-latency multilingual model (Italian + English). Override with
+          // ELEVENLABS_MODEL, e.g. eleven_multilingual_v2 for max quality.
+          model_id: process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5",
+        },
         {
           headers: {
             "xi-api-key": cleanApiKey,

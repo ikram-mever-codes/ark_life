@@ -223,19 +223,22 @@ export const uploadAvatarAssets = async (
 export const testAvatarSpeech = async (
   voiceId: string,
   text: string,
+  opts: { silent?: boolean } = {},
 ): Promise<Blob> => {
   try {
-    toast.loading("Generating neural audio...", loadingStyles);
+    if (!opts.silent) toast.loading("Generating neural audio...", loadingStyles);
     const response: any = await api.post(
       `${AVATARS_BASE}/test-speech`,
       { voiceId, text },
       { responseType: "blob" }, // Crucial for receiving audio files
     );
-    toast.dismiss();
+    if (!opts.silent) toast.dismiss();
     return response; // This returns the audio binary (Blob)
   } catch (error) {
-    toast.dismiss();
-    handleApiError(error, "Speech generation failed");
+    if (!opts.silent) {
+      toast.dismiss();
+      handleApiError(error, "Speech generation failed");
+    }
     throw error;
   }
 };

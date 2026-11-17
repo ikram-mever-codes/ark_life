@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { markdownToSpeech } from "@/utils/util";
+import { prepareSpeech, splitForSpeech } from "@/utils/util";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -18,6 +18,8 @@ import {
   X,
   Volume2,
   VolumeX,
+  Square,
+  Maximize2,
 } from "lucide-react";
 import { useSelector } from "react-redux";
 import { selectIsEmailVerified } from "@/app/Redux/features/userSlice";
@@ -51,11 +53,21 @@ const AvatarChatPage = () => {
   const [isSending, setIsSending] = useState(false);
   const [engineState, setEngineState] = useState<EngineState>("idle");
 
-  const [caption, setCaption] = useState("");
-  const [captionDone, setCaptionDone] = useState(true);
   const [audioFailed, setAudioFailed] = useState(false);
 
   const [rightOpen, setRightOpen] = useState(false); // conversation drawer
+  const [readerOpen, setReaderOpen] = useState(false); // full-answer reader
+  // Escape closes the reader / conversation drawer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setReaderOpen(false);
+        setRightOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const emailVerified = useSelector(selectIsEmailVerified);
 
   const [isListening, setIsListening] = useState(false);
@@ -73,7 +85,6 @@ const AvatarChatPage = () => {
   const interimTextRef = useRef("");
 
   const historyEndRef = useRef<HTMLDivElement | null>(null);
-  const typeIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
@@ -90,8 +101,6 @@ const AvatarChatPage = () => {
             .reverse()
             .find((m) => m.role === "avatar");
           if (lastAvatarMsg) {
-            setCaption(lastAvatarMsg.text);
-            setCaptionDone(true);
           }
         } catch {}
       } catch (err) {
@@ -139,7 +148,6 @@ const AvatarChatPage = () => {
   /* ── Cleanup on unmount ───────────────────────────────────────────── */
   useEffect(() => {
     return () => {
-      if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = "";
@@ -147,101 +155,99 @@ const AvatarChatPage = () => {
     };
   }, []);
 
-  /* ── Fallback: word-timer caption (no audio available) ──────────────
-   * No real audio exists in this path, so there's nothing to sync
-   * playback to — the video (if any) starts immediately alongside the
-   * typed caption rather than waiting on an event that will never fire.
+  /* ── Voice playback: chunked & pipelined ───────────────────────────
+   * Long answers used to be synthesised in ONE ElevenLabs request, so
+   * nothing played until the whole audio existed (seconds of silence) and
+   * the text was revealed word-by-word in sync with it.
+   *
+   * Now: the full answer is shown immediately in the reply panel, and the
+   * speech text is split into sentence chunks. The first chunk is short so
+   * the voice starts fast; each next chunk is fetched while the current one
+   * plays. `speechGenRef` cancels an older reply when a new one starts.
+   * engineState becomes "speaking" only on real playback (audio.onplaying)
+   * so the master video stays in sync with audible speech.
    */
-  const playCaptionTimer = useCallback((text: string) => {
-    if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
-    setCaption("");
-    setCaptionDone(false);
-    setEngineState("speaking");
-    let i = 0;
-    typeIntervalRef.current = setInterval(() => {
-      i++;
-      setCaption(text.slice(0, i));
-      if (i >= text.length) {
-        if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
-        setCaptionDone(true);
-        setEngineState("idle");
-      }
-    }, 22);
+  const speechGenRef = useRef(0);
+
+  const stopSpeech = useCallback(() => {
+    speechGenRef.current++;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+    }
+    setEngineState("idle");
   }, []);
 
-  /* ── Primary: audio playback with caption + video sync ──────────────
-   * Uses the same testAvatarSpeech(voiceId, text) endpoint the Avatars
-   * grid already uses for voice previews — the backend's chat.interact
-   * route returns text + voiceId only, it does not synthesize audio
-   * itself, so synthesis happens client-side via this call.
-   *
-   * engineState stays whatever it already was (set to "listening" by
-   * dispatchMessage) all the way through the network fetch and audio
-   * decode — it only flips to "speaking" on the browser's `onplaying`
-   * event, which fires once the audio is ACTUALLY producing sound, not
-   * when .play() is called or when this function starts. That's what
-   * keeps the master-video swap genuinely in sync with audible speech
-   * instead of firing early and sitting on a black/loading frame.
-   */
-  const playCaptionWithAudio = useCallback(
-    async (text: string, voiceId?: string) => {
-      if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
-      setCaption("");
-      setCaptionDone(false);
+  const playBlob = useCallback(
+    (blob: Blob, gen: number) =>
+      new Promise<boolean>((resolve) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        const done = (ok: boolean) => {
+          URL.revokeObjectURL(url);
+          resolve(ok);
+        };
+        audio.onplaying = () => {
+          if (gen === speechGenRef.current) setEngineState("speaking");
+        };
+        audio.onended = () => done(true);
+        audio.onerror = () => done(false);
+        audio.onpause = () => {
+          // stopSpeech() pauses the element: end this chunk immediately.
+          if (gen !== speechGenRef.current) done(false);
+        };
+        audio.play().catch(() => done(false));
+      }),
+    [],
+  );
+
+  const speakReply = useCallback(
+    async (markdown: string, voiceId?: string) => {
+      const gen = ++speechGenRef.current;
+      if (audioRef.current) audioRef.current.pause();
       setAudioFailed(false);
 
-      if (!voiceId) {
-        playCaptionTimer(text);
+      const chunks = splitForSpeech(prepareSpeech(markdown));
+      if (!voiceId || chunks.length === 0) {
+        setEngineState("idle");
         return;
       }
 
-      const words = text.split(/\s+/).filter(Boolean);
+      const fetchChunk = (i: number) =>
+        testAvatarSpeech(voiceId, chunks[i], { silent: true });
 
-      try {
-        const audioBlob = await testAvatarSpeech(voiceId, text);
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-
-        audio.onplaying = () => {
-          // Fires only once real playback has begun (after any
-          // buffering) — this is the sole trigger for showing the
-          // master video and the "Speaking" state. It may fire more
-          // than once if playback stalls and resumes mid-clip; setting
-          // the same state again is a harmless no-op for React.
-          setEngineState("speaking");
-        };
-
-        audio.ontimeupdate = () => {
-          if (!audio.duration || isNaN(audio.duration)) return;
-          const progress = Math.min(audio.currentTime / audio.duration, 1);
-          const revealCount = Math.max(1, Math.round(progress * words.length));
-          setCaption(words.slice(0, revealCount).join(" "));
-        };
-
-        audio.onended = () => {
-          setCaption(text);
-          setCaptionDone(true);
-          setEngineState("idle");
-          URL.revokeObjectURL(audioUrl);
-        };
-
-        audio.onerror = () => {
+      let next: Promise<Blob> = fetchChunk(0);
+      for (let i = 0; i < chunks.length; i++) {
+        let blob: Blob;
+        try {
+          blob = await next;
+        } catch {
+          if (gen === speechGenRef.current) {
+            setAudioFailed(true);
+            setEngineState("idle");
+          }
+          return;
+        }
+        if (gen !== speechGenRef.current) return; // a newer reply took over
+        if (i + 1 < chunks.length) {
+          next = fetchChunk(i + 1); // prefetch while this chunk plays
+          next.catch(() => {});
+        }
+        const ok = await playBlob(blob, gen);
+        if (gen !== speechGenRef.current) return;
+        if (!ok) {
           setAudioFailed(true);
-          URL.revokeObjectURL(audioUrl);
-          playCaptionTimer(text);
-        };
-
-        await audio.play();
-      } catch (err) {
-        // Synthesis or playback failed (no credits, network, autoplay
-        // block, etc.) — still show the reply via the timer fallback.
-        setAudioFailed(true);
-        playCaptionTimer(text);
+          break;
+        }
       }
+      if (gen === speechGenRef.current) setEngineState("idle");
     },
-    [playCaptionTimer],
+    [playBlob],
   );
+
+  // Stop any voice when leaving the page.
+  useEffect(() => () => stopSpeech(), [stopSpeech]);
 
   /* ── Core send — shared by text input and voice transcript ──────── */
   const dispatchMessage = async (text: string) => {
@@ -278,7 +284,7 @@ const AvatarChatPage = () => {
         // engineState stays "listening" (set above) through the entire
         // TTS fetch inside playCaptionWithAudio — it only becomes
         // "speaking" once audio.onplaying actually fires.
-        playCaptionWithAudio(markdownToSpeech(replyText), voiceId);
+        speakReply(replyText, voiceId);
       } else {
         setEngineState("idle");
       }
@@ -427,7 +433,6 @@ const AvatarChatPage = () => {
     engineState === "speaking" && !!avatar.masterVideoUrl && !videoBroken;
 
   const lastReply = [...messages].reverse().find((m) => m.role === "avatar");
-  const typing = !captionDone && !!caption;
 
   return (
     <div className="twin-page min-h-[calc(100dvh-4rem)] w-full min-w-0 overflow-x-hidden text-foreground scrollbar-theme">
@@ -454,7 +459,7 @@ const AvatarChatPage = () => {
 
         {/* ── CENTER — portrait · reply · input ──────────────────────── */}
         <section className="order-1 lg:order-none flex flex-col gap-3 min-h-0 min-w-0">
-          <div className="relative h-[52vh] sm:h-[60vh] lg:h-auto lg:flex-1 lg:min-h-0 rounded-lg overflow-hidden border border-border/50 bg-[radial-gradient(ellipse_at_center,rgba(24,185,205,0.06),transparent_70%)]">
+          <div className="relative h-[52vh] sm:h-[60vh] lg:h-auto lg:flex-1 lg:min-h-[240px] rounded-lg overflow-hidden border border-border/50 bg-[radial-gradient(ellipse_at_center,rgba(24,185,205,0.06),transparent_70%)]">
             <CornerFrame active={engineState !== "idle"} />
 
             {avatar.heroImageUrl ? (
@@ -506,30 +511,50 @@ const AvatarChatPage = () => {
             </div>
           </div>
 
-          {/* Reply panel: live caption while speaking, full answer after */}
-          <div className="rounded-lg border border-border/70 bg-surface-elevated/60 px-4 py-3 shrink-0">
-            <div className="flex items-center justify-between mb-1">
-              <span className="hud-label !text-[9.5px] flex items-center gap-1.5 text-primary/80">
+          {/* Reply panel: the FULL answer is shown immediately (Markdown),
+              scrollable, with an expand button for long answers and a stop
+              button for the voice. */}
+          <div className="rounded-lg border border-border/70 bg-surface-elevated/60 px-4 py-3 shrink-0 lg:shrink lg:min-h-[7rem] lg:max-h-[46%] flex flex-col min-h-0">
+            <div className="flex items-center justify-between gap-2 mb-1.5 shrink-0">
+              <span className="hud-label !text-[9.5px] flex items-center gap-1.5 text-primary/80 shrink-0">
                 {audioFailed ? <VolumeX size={11} /> : <Volume2 size={11} />}
                 {audioFailed
                   ? "Reply (audio unavailable)"
-                  : typing
+                  : engineState === "speaking"
                     ? "Speaking"
-                    : "Last reply"}
+                    : engineState === "listening"
+                      ? "Thinking…"
+                      : "Last reply"}
               </span>
-              {lastReply?.sources && lastReply.sources.length > 0 && !typing && (
-                <span className="text-[10px] text-foreground-subtle truncate ml-3">
-                  📄 {lastReply.sources.map((s) => s.fileName).join(" · ")}
-                </span>
-              )}
+              <div className="flex items-center gap-1.5 min-w-0">
+                {lastReply?.sources && lastReply.sources.length > 0 && (
+                  <span className="hidden sm:inline text-[10px] text-foreground-subtle truncate">
+                    📄 {lastReply.sources.map((s) => s.fileName).join(" · ")}
+                  </span>
+                )}
+                {engineState === "speaking" && (
+                  <button
+                    onClick={stopSpeech}
+                    className="shrink-0 flex items-center gap-1 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-border hover:border-error/60 hover:text-error"
+                    title="Stop voice"
+                  >
+                    <Square size={10} /> Stop
+                  </button>
+                )}
+                {lastReply && (
+                  <button
+                    onClick={() => setReaderOpen(true)}
+                    className="shrink-0 p-1 rounded border border-border text-foreground-muted hover:text-primary hover:border-primary/50"
+                    title="Read full answer"
+                    aria-label="Read full answer"
+                  >
+                    <Maximize2 size={12} />
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="max-h-32 lg:max-h-36 overflow-y-auto text-sm leading-relaxed pr-1">
-              {typing ? (
-                <p className="text-foreground">
-                  {caption}
-                  <span className="inline-block w-1.5 h-4 bg-primary ml-0.5 animate-pulse align-middle" />
-                </p>
-              ) : lastReply ? (
+            <div className="flex-1 min-h-0 max-h-[45vh] lg:max-h-none overflow-y-auto overscroll-contain text-sm leading-relaxed pr-1">
+              {lastReply ? (
                 <div className="chat-md text-foreground">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {lastReply.text}
@@ -616,6 +641,47 @@ const AvatarChatPage = () => {
           <LifestylePanel />
         </aside>
       </div>
+
+      {/* ── Full-answer reader ──────────────────────────────────────────── */}
+      <AnimatePresence>
+        {readerOpen && lastReply && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] bg-overlay backdrop-blur-sm flex items-center justify-center p-3 sm:p-6"
+            onClick={() => setReaderOpen(false)}
+          >
+            <div
+              className="ui-panel-elevated w-full max-w-3xl max-h-[88vh] rounded-lg flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
+                <span className="hud-title text-sm">{avatar.name} — answer</span>
+                <button
+                  onClick={() => setReaderOpen(false)}
+                  className="text-foreground-subtle hover:text-foreground"
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 text-[15px] leading-relaxed">
+                <div className="chat-md text-foreground">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {lastReply.text}
+                  </ReactMarkdown>
+                </div>
+                {lastReply.sources && lastReply.sources.length > 0 && (
+                  <p className="mt-4 pt-3 border-t border-border text-xs text-foreground-muted">
+                    📄 {lastReply.sources.map((s) => s.fileName).join(" · ")}
+                  </p>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Conversation drawer ─────────────────────────────────────────── */}
       <AnimatePresence>

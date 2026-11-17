@@ -21,7 +21,14 @@ import mongoose from "mongoose";
 import MemoryVault, { DocumentStatus } from "../models/MemoryVault";
 import MemoryChunk from "../models/MemoryChunk";
 import { extractTextFromFile, chunkText } from "./textExtractionService";
-import { hasUsableText, ocrImageFile, ocrPdf } from "./ocrService";
+import {
+  countPdfPages,
+  hasUsableText,
+  OCR_MAX_PAGES,
+  ocrImageFile,
+  ocrPdfPages,
+  pageHasText,
+} from "./ocrService";
 import { storeChunksAsText } from "./memoryVaultService";
 
 const CHUNK_SIZE = 800;
@@ -110,6 +117,7 @@ async function extractWithOcrFallback(
   if (IMAGE_TYPES.has(fileType)) {
     await setFileFields(vaultId, fileId, { status: "ocr_processing" });
     const r = await ocrImageFile(filePath);
+    console.log(`[Documents] ${fileId}: image OCR via ${r.engine}`);
     return { text: r.text, pageCount: 1, ocrUsed: true };
   }
 
@@ -120,44 +128,64 @@ async function extractWithOcrFallback(
     return { text: extracted.text, ocrUsed: false };
   }
 
-  // PDF: use the embedded text if it is meaningful, otherwise OCR.
-  if (
-    extracted.ok &&
-    hasUsableText(extracted.text, extracted.pageCount ?? 1)
-  ) {
-    return {
-      text: extracted.text,
-      pageCount: extracted.pageCount,
-      ocrUsed: false,
-    };
+  // ── PDF: decide PAGE BY PAGE ─────────────────────────────────────────
+  // Many lab reports have a text letterhead but the results table is a
+  // scanned image. Every page without real text is OCR'd; pages with text
+  // keep their (exact) embedded text.
+  let pageTexts: string[] = extracted.ok ? [...(extracted.pages || [])] : [];
+  let pageCount = extracted.ok ? (extracted.pageCount ?? pageTexts.length) : 0;
+  if (!extracted.ok) {
+    try {
+      pageCount = await countPdfPages(filePath);
+    } catch {
+      throw new Error(
+        "This file could not be opened as a PDF. It may be damaged or password-protected.",
+      );
+    }
+    pageTexts = new Array(pageCount).fill("");
+  }
+
+  const largeImages = extracted.ok ? extracted.largeImagePages || [] : [];
+  // OCR a page when it has no real text, OR when it carries a large image
+  // (scanned results under a text letterhead).
+  const toOcr = pageTexts
+    .map((t, i) => (!pageHasText(t) || largeImages[i] ? i + 1 : 0))
+    .filter((n) => n > 0);
+
+  if (toOcr.length === 0) {
+    return { text: extracted.ok ? extracted.text : "", pageCount, ocrUsed: false };
   }
 
   console.log(
-    `[Documents] ${fileId}: no usable embedded text → running OCR` +
-      (extracted.ok ? "" : ` (extract error: ${extracted.error})`),
+    `[Documents] ${fileId}: OCR on ${toOcr.length}/${pageCount} page(s) (scanned content)`,
   );
   await setFileFields(vaultId, fileId, { status: "ocr_processing" });
-  let ocr: Awaited<ReturnType<typeof ocrPdf>>;
+
+  let ocr: Awaited<ReturnType<typeof ocrPdfPages>>;
   try {
-    ocr = await ocrPdf(filePath);
+    ocr = await ocrPdfPages(filePath, toOcr);
   } catch (e: any) {
-    const msg = String(e?.message || "");
-    // Keep "OCR not installed" visible to the admin; otherwise a friendly message.
-    if (msg.includes("not installed")) throw e;
-    console.error(`[Documents] ${fileId}: OCR failed: ${msg}`);
+    console.error(`[Documents] ${fileId}: OCR failed: ${e?.message}`);
     throw new Error(
-      extracted.ok
-        ? "OCR could not read this scanned document. Please try a clearer scan."
-        : "This file could not be opened as a PDF. It may be damaged or password-protected.",
+      "OCR could not read this scanned document. Please try a clearer scan.",
     );
   }
-  return {
-    text: ocr.truncated
-      ? `${ocr.text}\n\n[Note: only the first ${ocr.pageCount} pages were OCR-processed]`
-      : ocr.text,
-    pageCount: ocr.pageCount,
-    ocrUsed: true,
-  };
+
+  const parts = pageTexts.map((t, i) => {
+    const o = ocr.texts.get(i + 1);
+    // Keep exact embedded text, and add the OCR'd image content after it.
+    const body =
+      o === undefined ? t : pageHasText(t) ? `${t.trim()}\n${o}` : o;
+    return body.trim() ? `[Page ${i + 1}]\n${body.trim()}` : "";
+  });
+  const skipped = toOcr.length > OCR_MAX_PAGES;
+  const text =
+    parts.filter(Boolean).join("\n\n") +
+    (skipped
+      ? `\n\n[Note: only the first ${OCR_MAX_PAGES} scanned pages were OCR-processed]`
+      : "");
+  console.log(`[Documents] ${fileId}: OCR via ${ocr.engine} done`);
+  return { text, pageCount, ocrUsed: true };
 }
 
 /** Full pipeline for one document. Always ends in "indexed" or "failed". */

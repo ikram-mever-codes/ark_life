@@ -42,21 +42,18 @@ npm run dev                 # http://localhost:3000
 
 ## Production deployment (Hostinger VPS, Ubuntu, PM2 + nginx)
 
+One command, from the repository root on the server:
+
 ```bash
-git pull
-
-# Backend
-cd backend
-npm ci
-npm run build
-pm2 restart back            # first time: pm2 start dist/server.js --name back
-
-# Frontend
-cd ../frontend
-npm ci
-NEXT_PUBLIC_API_URL=https://api.arklifeproject.com npm run build
-pm2 restart front           # first time: pm2 start npm --name front -- start
+git pull && bash scripts/deploy.sh
 ```
+
+[`scripts/deploy.sh`](scripts/deploy.sh) does the following:
+1. Refuses to deploy if known injected-code markers are found (see "Security incident" below).
+2. Installs the OCR system packages if they are missing (`tesseract-ocr`, `-ita`, `-eng`, `poppler-utils`).
+3. Runs `npm ci` and builds the backend and the frontend.
+4. Restarts PM2 (`back`, `front`). It runs `node` and `next` directly, never through `package.json` scripts.
+5. Health-checks the backend.
 
 - `backend/.env` holds the real secrets on the server. It is git-ignored, so never commit it.
 - `NEXT_PUBLIC_API_URL` is baked into the frontend at build time.
@@ -81,11 +78,16 @@ External services used:
 ## Document pipeline (Clinical area)
 
 ```
-Upload ─► Processing ─► (no usable text?) ─► OCR Processing ─► Indexed
-                                                          └──► Failed (error shown, Retry available)
+Upload ─► Processing ─► (pages with scanned content?) ─► OCR Processing ─► Indexed
+                                                                    └──► Failed (error shown, Retry available)
 ```
 
-- PDFs with embedded text are read directly. Scanned PDFs and photos (JPG/PNG) go through Tesseract OCR (Italian and English).
+- **PDFs are checked page by page.** A page is OCR'd when it has no real text, or when it contains a large image. That covers a scanned results table under a text letterhead. Pages with real text keep their exact text, and small logos are ignored.
+- **Photos (JPG/PNG)** are cleaned before OCR: EXIF auto-rotation, grayscale, contrast stretch, and upscaling of small photos. Pages scanned sideways or upside down are detected and rotated automatically.
+- **OCR engines** (`OCR_ENGINE=auto`):
+  - With system Tesseract installed, the app uses it (fastest).
+  - Otherwise it uses the built-in engine (tesseract.js with bundled Italian and English models). OCR therefore keeps working even when the system packages are missing.
+  - Both engines run on our server; no external service is involved.
 - Processing runs in the background, one document at a time, with a hard timeout (`DOCUMENT_TIMEOUT_MS`). A document can never stay in "Processing" indefinitely. Documents interrupted by a server restart are re-queued automatically at boot.
 - Documents are served only through the authenticated endpoint `GET /api/v1/memory/files/:id/content`. The `uploads/memory` folder is not publicly accessible.
 
@@ -108,3 +110,14 @@ See [`docs/AI_ARCHITECTURE.md`](docs/AI_ARCHITECTURE.md).
 ## Health Record (FSE) import
 
 See [`docs/FSE_INTEGRATION.md`](docs/FSE_INTEGRATION.md).
+
+## Security incident (Nov 2026)
+
+Obfuscated malicious code was found in this project and has been removed:
+- in `frontend/postcss.config.mjs`, which Next.js executes on every dev/build (present since April 2026);
+- in `backend/init` and `frontend/init`, plus `node init` hooks in `package.json`, force-pushed to `main` from a compromised account.
+
+Rules for this repository:
+- Never merge the old `origin/main` until it has been replaced with clean code.
+- `scripts/deploy.sh` refuses to deploy if these markers reappear.
+- All secrets that were on affected machines (`backend/.env`: database, JWT, API keys, e-mail) must be rotated.
