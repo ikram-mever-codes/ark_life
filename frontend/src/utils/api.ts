@@ -68,7 +68,8 @@ api.interceptors.response.use(
           localStorage.removeItem("access_token");
           window.location.href = "/login";
         }
-      } else {
+      } else if (error.config?.responseType !== "blob") {
+        // Blob (audio) requests report their own readable errors.
         toast.error(error.response.data?.message || error.message, errorStyles);
       }
     }

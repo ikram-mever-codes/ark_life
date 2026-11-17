@@ -54,6 +54,7 @@ const AvatarChatPage = () => {
   const [engineState, setEngineState] = useState<EngineState>("idle");
 
   const [audioFailed, setAudioFailed] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   const [rightOpen, setRightOpen] = useState(false); // conversation drawer
   const [readerOpen, setReaderOpen] = useState(false); // full-answer reader
@@ -207,6 +208,7 @@ const AvatarChatPage = () => {
       const gen = ++speechGenRef.current;
       if (audioRef.current) audioRef.current.pause();
       setAudioFailed(false);
+      setAudioError(null);
 
       const chunks = splitForSpeech(prepareSpeech(markdown));
       if (!voiceId || chunks.length === 0) {
@@ -222,9 +224,10 @@ const AvatarChatPage = () => {
         let blob: Blob;
         try {
           blob = await next;
-        } catch {
+        } catch (err: any) {
           if (gen === speechGenRef.current) {
             setAudioFailed(true);
+            setAudioError(err?.message || "Voice generation failed");
             setEngineState("idle");
           }
           return;
@@ -459,14 +462,14 @@ const AvatarChatPage = () => {
 
         {/* ── CENTER — portrait · reply · input ──────────────────────── */}
         <section className="order-1 lg:order-none flex flex-col gap-3 min-h-0 min-w-0">
-          <div className="relative h-[52vh] sm:h-[60vh] lg:h-auto lg:flex-1 lg:min-h-[240px] rounded-lg overflow-hidden border border-border/50 bg-[radial-gradient(ellipse_at_center,rgba(24,185,205,0.06),transparent_70%)]">
+          <div className="relative w-full max-w-md mx-auto aspect-[4/5] max-h-[70vh] lg:max-w-none lg:mx-0 lg:aspect-auto lg:max-h-none lg:h-auto lg:flex-1 lg:min-h-[240px] rounded-lg overflow-hidden border border-border/50 bg-[radial-gradient(ellipse_at_center,rgba(24,185,205,0.06),transparent_70%)]">
             <CornerFrame active={engineState !== "idle"} />
 
             {avatar.heroImageUrl ? (
               <motion.img
                 src={getAssetUrl(avatar.heroImageUrl)}
                 alt={avatar.name}
-                className="absolute inset-0 w-full h-full object-cover object-top"
+                className="absolute inset-0 w-full h-full object-cover object-[50%_30%]"
                 animate={{ opacity: showMasterVideo ? 0 : 1 }}
                 transition={{ duration: 0.15 }}
               />
@@ -483,7 +486,7 @@ const AvatarChatPage = () => {
               <motion.video
                 ref={videoElRef}
                 src={avatar.masterVideoUrl}
-                className="absolute inset-0 w-full h-full object-cover object-top"
+                className="absolute inset-0 w-full h-full object-cover object-[50%_30%]"
                 animate={{ opacity: showMasterVideo ? 1 : 0 }}
                 transition={{ duration: 0.15 }}
                 loop
@@ -553,6 +556,11 @@ const AvatarChatPage = () => {
                 )}
               </div>
             </div>
+            {audioError && (
+              <p className="shrink-0 mb-1.5 text-[11px] text-warning/90 flex items-start gap-1.5">
+                <VolumeX size={12} className="mt-0.5 shrink-0" /> {audioError}
+              </p>
+            )}
             <div className="flex-1 min-h-0 max-h-[45vh] lg:max-h-none overflow-y-auto overscroll-contain text-sm leading-relaxed pr-1">
               {lastReply ? (
                 <div className="chat-md text-foreground">
