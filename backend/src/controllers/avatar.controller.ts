@@ -649,37 +649,69 @@ export class AvatarController {
     // single request to protect credits.
     const speechText = String(text || "Neural link active.").slice(0, 1200);
 
-    try {
-      const response = await axios.post(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        {
-          text: speechText,
-          // Low-latency multilingual model (Italian + English). Override with
-          // ELEVENLABS_MODEL, e.g. eleven_multilingual_v2 for max quality.
-          model_id: process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5",
-        },
-        {
-          headers: {
-            "xi-api-key": cleanApiKey,
-            "Content-Type": "application/json",
-            Accept: "audio/mpeg",
-          },
-          responseType: "arraybuffer",
-        },
-      );
-      res.set("Content-Type", "audio/mpeg");
-      return res.send(response.data);
-    } catch (e: any) {
-      console.error(
-        "Test Speech Error:",
-        e.response?.data
-          ? Buffer.from(e.response.data).toString("utf-8")
-          : e.message,
-      );
-      return res
-        .status(500)
-        .json({ success: false, message: "Vocal frequency failure" });
+    if (!cleanApiKey) {
+      return res.status(503).json({
+        success: false,
+        code: "missing_api_key",
+        message: "Voice unavailable: ELEVENLABS_API_KEY is not set on the server.",
+      });
     }
+
+    // Low-latency multilingual model first (Italian + English); if the
+    // account/voice rejects it, fall back to the standard multilingual model.
+    const models = Array.from(
+      new Set([
+        process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5",
+        "eleven_multilingual_v2",
+      ]),
+    );
+
+    let lastErr: { status?: number; body: string } = { body: "" };
+    for (const model_id of models) {
+      try {
+        const response = await axios.post(
+          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+          { text: speechText, model_id },
+          {
+            headers: {
+              "xi-api-key": cleanApiKey,
+              "Content-Type": "application/json",
+              Accept: "audio/mpeg",
+            },
+            responseType: "arraybuffer",
+            timeout: 30_000,
+          },
+        );
+        res.set("Content-Type", "audio/mpeg");
+        return res.send(response.data);
+      } catch (e: any) {
+        const body = e.response?.data
+          ? Buffer.from(e.response.data).toString("utf-8")
+          : String(e.message || "");
+        lastErr = { status: e.response?.status, body };
+        console.error(
+          `Test Speech Error [model=${model_id}] status=${lastErr.status}:`,
+          body.slice(0, 500),
+        );
+        // Only a model problem is worth retrying with another model.
+        if (!/model/i.test(body)) break;
+      }
+    }
+
+    // Translate the ElevenLabs error into a reason the user can act on.
+    const b = lastErr.body.toLowerCase();
+    const reason =
+      /voice_not_found|voice.*not.*found|does not exist/.test(b)
+        ? { code: "voice_not_found", message: "This avatar's voice no longer exists in ElevenLabs. Re-create it with \"Clone AI Voice & Video\" on the avatar page." }
+        : /quota|credits|character_limit|exceeds your/.test(b)
+          ? { code: "quota_exceeded", message: "ElevenLabs credits are exhausted for this month." }
+          : lastErr.status === 401 || /invalid_api_key|unauthorized|api key/.test(b)
+            ? { code: "invalid_api_key", message: "The ElevenLabs API key on the server is invalid or expired." }
+            : lastErr.status === 429
+              ? { code: "rate_limited", message: "ElevenLabs is busy (rate limit). Please try again shortly." }
+              : { code: "tts_failed", message: "Voice generation failed. See server logs (Test Speech Error)." };
+
+    return res.status(502).json({ success: false, ...reason });
   };
 
   clearAllVoices = async (req: AuthRequest, res: Response) => {

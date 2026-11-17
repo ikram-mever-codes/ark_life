@@ -234,12 +234,24 @@ export const testAvatarSpeech = async (
     );
     if (!opts.silent) toast.dismiss();
     return response; // This returns the audio binary (Blob)
-  } catch (error) {
+  } catch (error: any) {
+    // Audio requests use responseType "blob", so the server's JSON error
+    // arrives as a Blob: read the human-readable reason out of it.
+    let reason = "Voice generation failed";
+    const data = error?.response?.data;
+    if (data instanceof Blob) {
+      try {
+        const parsed = JSON.parse(await data.text());
+        if (parsed?.message) reason = parsed.message;
+      } catch {
+        /* not JSON */
+      }
+    }
     if (!opts.silent) {
       toast.dismiss();
-      handleApiError(error, "Speech generation failed");
+      handleApiError(new Error(reason), "Speech generation failed");
     }
-    throw error;
+    throw new Error(reason);
   }
 };
 
