@@ -698,20 +698,53 @@ export class AvatarController {
       }
     }
 
-    // Translate the ElevenLabs error into a reason the user can act on.
-    const b = lastErr.body.toLowerCase();
-    const reason =
-      /voice_not_found|voice.*not.*found|does not exist/.test(b)
-        ? { code: "voice_not_found", message: "This avatar's voice no longer exists in ElevenLabs. Re-create it with \"Clone AI Voice & Video\" on the avatar page." }
-        : /quota|credits|character_limit|exceeds your/.test(b)
-          ? { code: "quota_exceeded", message: "ElevenLabs credits are exhausted for this month." }
-          : lastErr.status === 401 || /invalid_api_key|unauthorized|api key/.test(b)
-            ? { code: "invalid_api_key", message: "The ElevenLabs API key on the server is invalid or expired." }
-            : lastErr.status === 429
-              ? { code: "rate_limited", message: "ElevenLabs is busy (rate limit). Please try again shortly." }
-              : { code: "tts_failed", message: "Voice generation failed. See server logs (Test Speech Error)." };
+    // ElevenLabs errors look like {"detail":{"status":"voice_not_found","message":"…"}}.
+    // Use that exact status code; fall back to keyword matching.
+    let providerStatus = "";
+    let providerMessage = "";
+    try {
+      const d = JSON.parse(lastErr.body)?.detail;
+      providerStatus = String(typeof d === "object" ? d?.status || "" : "");
+      providerMessage = String(typeof d === "object" ? d?.message || "" : d || "");
+    } catch {
+      providerMessage = lastErr.body.slice(0, 300);
+    }
+    const s = `${providerStatus} ${providerMessage}`.toLowerCase();
 
-    return res.status(502).json({ success: false, ...reason });
+    const REASONS: Record<string, string> = {
+      voice_not_found:
+        'This avatar\'s voice no longer exists in ElevenLabs. Re-create it with "Clone AI Voice & Video" on the avatar page.',
+      quota_exceeded: "ElevenLabs credits are exhausted for this month.",
+      detected_unusual_activity:
+        "ElevenLabs blocked this account for unusual activity (free plan restriction). A paid ElevenLabs plan is required.",
+      missing_permissions:
+        "The ElevenLabs API key is missing the Text-to-Speech permission. Enable it for the key in ElevenLabs settings.",
+      invalid_api_key: "The ElevenLabs API key on the server is invalid or expired.",
+      rate_limited: "ElevenLabs is busy (rate limit). Please try again shortly.",
+    };
+    const code =
+      (providerStatus && REASONS[providerStatus] && providerStatus) ||
+      (/voice_not_found|voice.*not.*found|does not exist/.test(s) && "voice_not_found") ||
+      (/quota|credits|character_limit|exceeds your/.test(s) && "quota_exceeded") ||
+      (/unusual activity/.test(s) && "detected_unusual_activity") ||
+      (/permission/.test(s) && "missing_permissions") ||
+      (/invalid_api_key|invalid api key/.test(s) && "invalid_api_key") ||
+      (lastErr.status === 429 && "rate_limited") ||
+      "tts_failed";
+
+    return res.status(502).json({
+      success: false,
+      code,
+      message:
+        REASONS[code] ||
+        `Voice generation failed${providerMessage ? `: ${providerMessage.slice(0, 200)}` : "."}`,
+      // Exact provider answer, for troubleshooting (contains no secrets).
+      provider: {
+        httpStatus: lastErr.status ?? null,
+        status: providerStatus || null,
+        message: providerMessage.slice(0, 300) || null,
+      },
+    });
   };
 
   clearAllVoices = async (req: AuthRequest, res: Response) => {
