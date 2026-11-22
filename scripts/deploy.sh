@@ -77,9 +77,11 @@ say "Restarting PM2 processes"
 command -v pm2 >/dev/null || npm install -g pm2
 pm2 delete "$BACK_NAME" >/dev/null 2>&1 || true
 pm2 delete "$FRONT_NAME" >/dev/null 2>&1 || true
-pm2 start backend/dist/server.js --name "$BACK_NAME" --cwd backend --update-env
-pm2 start frontend/node_modules/next/dist/bin/next --name "$FRONT_NAME" \
-  --cwd frontend -- start -p "$FRONT_PORT"
+# Absolute paths: PM2 resolves a relative script path against --cwd.
+pm2 start "$ROOT/backend/dist/server.js" --name "$BACK_NAME" \
+  --cwd "$ROOT/backend" --update-env
+pm2 start "$ROOT/frontend/node_modules/next/dist/bin/next" --name "$FRONT_NAME" \
+  --cwd "$ROOT/frontend" -- start -p "$FRONT_PORT"
 pm2 save
 
 # ── 5. Health check ────────────────────────────────────────────────────
